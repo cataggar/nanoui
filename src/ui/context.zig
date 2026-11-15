@@ -95,6 +95,8 @@ const Anim = struct { value: f32, frame: u64 };
 const Memory = struct { bytes: [48]u8 align(16), frame: u64 };
 
 pub const Context = struct {
+    pub const max_stage_holes = 32;
+
     gpa: std.mem.Allocator,
     arena: std.heap.ArenaAllocator,
     text: *text.TextSystem,
@@ -124,8 +126,8 @@ pub const Context = struct {
     stack: std.ArrayList(u32) = .empty,
 
     transparent_root: bool = false,
-    stage_rects: [4]types.Rect = @splat(.{}),
-    stage_nodes: [4]u32 = @splat(none),
+    stage_rects: [max_stage_holes]types.Rect = @splat(.{}),
+    stage_nodes: [max_stage_holes]u32 = @splat(none),
     stage_count: usize = 0,
     a11y_items: std.ArrayList(A11yItem) = .empty,
     // Kept across frames.

@@ -7,6 +7,7 @@ const Page = @import("page_webkit.zig").Page;
 const ui = @import("ui/ui.zig");
 const Surface = @import("ui/surface.zig").Surface;
 const Lights = @import("window_lights.zig").Lights;
+const tabs = @import("window_tabs.zig");
 
 const window_types = @import("window_types.zig");
 pub const Asset = window_types.Asset;
@@ -30,6 +31,31 @@ fn setAppIcon(icon: []const u8) void {
 }
 
 pub const Window = struct {
+    /// Performs the native close action when visible, or closes directly when hidden or borderless.
+    pub fn performClose(self: *Window) void {
+        tabs.performClose(self);
+    }
+    /// Adds `other` to this window's native tab group.
+    pub fn addTab(self: *Window, other: *Window, after: bool) bool {
+        return tabs.addTab(self, other, after);
+    }
+    /// The number of windows in this tab group, or one when there is no group.
+    pub fn tabCount(self: *const Window) usize {
+        return tabs.tabCount(self);
+    }
+    /// This window's zero-based tab index, or null when it has no tab group.
+    pub fn tabIndex(self: *const Window) ?usize {
+        return tabs.tabIndex(self);
+    }
+    /// The nanoui window at `index` in this tab group.
+    pub fn tabAt(self: *const Window, index: usize) ?*Window {
+        return tabs.tabAt(self, index);
+    }
+    /// Moves this tab by a clamped signed offset.
+    pub fn moveTab(self: *Window, delta: isize) bool {
+        return tabs.moveTab(self, delta);
+    }
+
     app: *App,
     nswindow: objc.Object,
     delegate: objc.Object,

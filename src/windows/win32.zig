@@ -135,6 +135,7 @@ pub extern "user32" fn SetTimer(hwnd: ?HWND, id: usize, ms: u32, proc: ?TIMERPRO
 pub extern "user32" fn KillTimer(hwnd: ?HWND, id: usize) callconv(.winapi) BOOL;
 pub extern "user32" fn LoadCursorW(inst: ?HINSTANCE, name: usize) callconv(.winapi) ?HCURSOR;
 pub extern "user32" fn SetCursor(cursor: ?HCURSOR) callconv(.winapi) ?HCURSOR;
+pub extern "user32" fn ShowCursor(show: BOOL) callconv(.winapi) i32;
 pub extern "user32" fn GetDpiForWindow(hwnd: HWND) callconv(.winapi) u32;
 /// Per-monitor v2 DPI awareness: every window follows the DPI of the monitor
 /// it is on (`WM_DPICHANGED` says when that changed). The context handle is

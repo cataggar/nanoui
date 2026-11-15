@@ -17,6 +17,7 @@ const scenes = @import("scenes.zig");
 const tsgen = @import("../tsgen.zig");
 const ipc = @import("../ipc.zig").ipc(Window, App);
 const Window = window_mod.Window;
+const app_timer = @import("../app_timer_none.zig");
 
 extern "c" fn UIApplicationMain(argc: c_int, argv: [*]?[*:0]u8, principal: ?objc.Object, delegate: ?objc.Object) c_int;
 extern "c" fn _NSGetArgc() *c_int;
@@ -30,12 +31,18 @@ pub const Options = struct {
     name: []const u8 = "nanoui",
     /// Kept for the desktop's sake: iOS apps never quit themselves.
     quit_on_last_window_closed: bool = true,
+    ctx: ?*anyopaque = null,
+    on_appearance_change: ?*const fn (ctx: ?*anyopaque, dark: bool) void = null,
+    on_sleep: ?*const fn (ctx: ?*anyopaque) void = null,
+    on_wake: ?*const fn (ctx: ?*anyopaque) void = null,
 };
 
 /// The one app: UIKit makes its delegates itself, by class name.
 var current: ?*App = null;
 
 pub const App = struct {
+    pub const Timer = app_timer.Timer;
+
     gpa: std.mem.Allocator,
     io: std.Io,
     options: Options,
@@ -204,6 +211,10 @@ pub const App = struct {
 
     pub fn after(ms: u64, ctx: ?*anyopaque, func: *const fn (?*anyopaque) callconv(.c) void) void {
         objc.dispatchAfter(ms * std.time.ns_per_ms, ctx, func);
+    }
+
+    pub fn every(ms: u64, ctx: ?*anyopaque, func: *const fn (?*anyopaque) callconv(.c) void) ?*Timer {
+        return app_timer.every(ms, ctx, func);
     }
 
     /// Menus become the accelerators of a hardware keyboard.

@@ -118,6 +118,8 @@ pub const shell = struct {
         defer objc.release(g);
         objc.msg(void, g, "notificationOccurred:", .{@as(objc.NSInteger, 1)});
     }
+
+    pub fn setCursorVisible(_: bool) void {}
 };
 
 pub const Directory = enum {

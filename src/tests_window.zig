@@ -64,6 +64,63 @@ test "a window without decorations is borderless and still takes keys" {
     try testing.expect(objc.msg(objc.BOOL, panel.nswindow, "isKindOfClass:", .{objc.class("NSPanel")}) == objc.YES);
 }
 
+test "hidden performClose closes directly without asking AppKit" {
+    const app = try makeApp(testing.allocator);
+    defer freeApp(app);
+    var p: Page = .{};
+    var asked: usize = 0;
+    const check = struct {
+        fn close(ctx: *anyopaque, _: *Window) bool {
+            const count: *usize = @ptrCast(@alignCast(ctx));
+            count.* += 1;
+            return false;
+        }
+    };
+    const win = try app.newWindow(.{
+        .title = "hidden",
+        .width = 200,
+        .height = 120,
+        .visible = false,
+        .should_close = .{ .ctx = &asked, .func = check.close },
+        .content = .{ .view = .init(&p, Page.view) },
+    });
+    win.performClose();
+    try testing.expectEqual(@as(usize, 0), asked);
+    try testing.expectEqual(@as(usize, 0), app.windows.items.len);
+}
+
+test "hidden windows form and reorder a native tab group" {
+    const app = try makeApp(testing.allocator);
+    defer freeApp(app);
+    var p: Page = .{};
+    const options: @import("window.zig").Options = .{
+        .title = "tab",
+        .width = 200,
+        .height = 120,
+        .visible = false,
+        .tabbing_disallowed = false,
+        .content = .{ .view = .init(&p, Page.view) },
+    };
+    const a = try app.newWindow(options);
+    const b = try app.newWindow(options);
+    const c = try app.newWindow(options);
+    try testing.expect(a.addTab(b, true));
+    try testing.expect(b.addTab(c, true));
+    try testing.expectEqual(@as(usize, 3), a.tabCount());
+    try testing.expectEqual(@as(?usize, 0), a.tabIndex());
+    try testing.expectEqual(@as(?usize, 1), b.tabIndex());
+    try testing.expectEqual(@as(?usize, 2), c.tabIndex());
+    try testing.expect(a.tabAt(0) == a);
+    try testing.expect(a.tabAt(1) == b);
+    try testing.expect(a.tabAt(2) == c);
+    try testing.expect(a.tabAt(3) == null);
+    try testing.expect(a.moveTab(2));
+    try testing.expectEqual(@as(?usize, 2), a.tabIndex());
+    try testing.expect(!a.moveTab(1));
+    try testing.expect(a.moveTab(-1));
+    try testing.expectEqual(@as(?usize, 1), a.tabIndex());
+}
+
 test "skip_taskbar leaves Command-` and the Window menu, all_spaces still joins every Space" {
     const app = try makeApp(testing.allocator);
     defer freeApp(app);

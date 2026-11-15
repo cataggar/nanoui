@@ -105,6 +105,8 @@ pub const shell = struct {
     }
 
     pub fn beep() void {}
+
+    pub fn setCursorVisible(_: bool) void {}
 };
 
 pub const Directory = enum { data, cache, home, documents, downloads, desktop, temp };

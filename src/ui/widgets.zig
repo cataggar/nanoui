@@ -252,7 +252,7 @@ pub fn textureAffine(c: *Context, style: types.Style, source: @import("gpu.zig")
 /// takes the touches that land on it. Returns its id.
 pub fn hole(c: *Context, name: []const u8, radius: f32) u64 {
     const i = c.leaf(.{ .width = .fill, .height = .fill }, .{ .hole = radius }, name);
-    c.node(i).interactive = true;
+    c.addStageHoleNode(i);
     return c.node(i).id;
 }
 

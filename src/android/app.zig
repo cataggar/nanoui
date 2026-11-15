@@ -20,16 +20,23 @@ const ui = @import("../ui/ui.zig");
 const jni = @import("jni.zig");
 const Window = window_mod.Window;
 const Event = @import("event.zig").Event;
+const app_timer = @import("../app_timer_none.zig");
 
 pub const Options = struct {
     name: []const u8 = "nanoui",
     /// Quit when the last window closes: the activity finishes.
     quit_on_last_window_closed: bool = true,
+    ctx: ?*anyopaque = null,
+    on_appearance_change: ?*const fn (ctx: ?*anyopaque, dark: bool) void = null,
+    on_sleep: ?*const fn (ctx: ?*anyopaque) void = null,
+    on_wake: ?*const fn (ctx: ?*anyopaque) void = null,
 };
 
 var current: ?*App = null;
 
 pub const App = struct {
+    pub const Timer = app_timer.Timer;
+
     gpa: std.mem.Allocator,
     io: std.Io,
     options: Options,
@@ -178,6 +185,10 @@ pub const App = struct {
     /// Calls `func(ctx)` on the app's thread after `ms` milliseconds.
     pub fn after(ms: u64, ctx: ?*anyopaque, func: *const fn (?*anyopaque) callconv(.c) void) void {
         _ = calls.after(ms, ctx, func);
+    }
+
+    pub fn every(ms: u64, ctx: ?*anyopaque, func: *const fn (?*anyopaque) callconv(.c) void) ?*Timer {
+        return app_timer.every(ms, ctx, func);
     }
 
     /// Menus become the accelerators of a hardware keyboard.
