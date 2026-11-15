@@ -115,10 +115,19 @@ pub const shell = struct {
         NSBeep();
     }
 
+    /// Hides or shows the cursor without unbalancing AppKit's hide count.
+    pub fn setCursorVisible(visible: bool) void {
+        if (visible == cursor_visible) return;
+        objc.msg(void, objc.class("NSCursor"), if (visible) "unhide" else "hide", .{});
+        cursor_visible = visible;
+    }
+
     fn workspace() objc.Object {
         return objc.msg(objc.Object, objc.class("NSWorkspace"), "sharedWorkspace", .{});
     }
 };
+
+var cursor_visible = true;
 
 extern "c" fn NSBeep() void;
 

@@ -8,6 +8,8 @@ const ipc = @import("ipc.zig").ipc(window_mod.Window, App);
 const menu_mod = @import("menu.zig");
 const tray_mod = @import("tray.zig");
 const Window = window_mod.Window;
+const observers = @import("app_observers.zig");
+const app_timer = @import("app_timer.zig");
 
 pub const Options = struct {
     name: []const u8 = "nanoui",
@@ -27,6 +29,12 @@ pub const Options = struct {
     on_continue_activity: ?*const fn (ctx: ?*anyopaque, url: []const u8) void = null,
     /// The app became active (true) or stopped being active.
     on_active: ?*const fn (ctx: ?*anyopaque, active: bool) void = null,
+    /// The system changed between light and dark appearance.
+    on_appearance_change: ?*const fn (ctx: ?*anyopaque, dark: bool) void = null,
+    /// The computer is about to sleep.
+    on_sleep: ?*const fn (ctx: ?*anyopaque) void = null,
+    /// The computer woke from sleep.
+    on_wake: ?*const fn (ctx: ?*anyopaque) void = null,
     /// What the About panel (the menu's `.about` role, `showAbout`) shows.
     about: extras.About = .{},
     /// `.accessory`: a menu bar app (a tray, `LSUIElement`), with no Dock
@@ -89,6 +97,10 @@ pub const App = struct {
     /// Told when the app goes out of sight: it resigns active, or a window
     /// hides or is covered (an update waiting may go in).
     away_hook: ?AwayHook = null,
+    appearance_observer: ?*observers.AppearanceObserver = null,
+    power_observer: ?*observers.PowerObserver = null,
+
+    pub const Timer = app_timer.Timer;
 
     pub const AwayHook = struct {
         ctx: *anyopaque,
@@ -181,6 +193,13 @@ pub const App = struct {
         _ = objc.msg(objc.BOOL, nsapp, "setActivationPolicy:", .{activationPolicy(flags.hidden, options.activation)});
         objc.msg(void, nsapp, "setDelegate:", .{delegate});
         try self.setMenu(&default_menu);
+        if (options.on_appearance_change) |callback|
+            self.appearance_observer = try observers.AppearanceObserver.create(gpa, nsapp, options.ctx, callback);
+        if (options.on_sleep != null or options.on_wake != null) {
+            const workspace = objc.msg(objc.Object, objc.class("NSWorkspace"), "sharedWorkspace", .{});
+            const center = objc.msg(objc.Object, workspace, "notificationCenter", .{});
+            self.power_observer = try observers.PowerObserver.create(gpa, center, options.ctx, options.on_sleep, options.on_wake);
+        }
         return self;
     }
 
@@ -223,6 +242,8 @@ pub const App = struct {
     }
 
     pub fn destroyImpl(self: *App) void {
+        if (self.appearance_observer) |observer| observer.stop();
+        if (self.power_observer) |observer| observer.stop();
         while (self.windows.items.len > 0) {
             const w = self.windows.items[self.windows.items.len - 1];
             w.close();
@@ -388,6 +409,11 @@ pub const App = struct {
     /// Calls `func(ctx)` on the main thread after `ms` milliseconds.
     pub fn after(ms: u64, ctx: ?*anyopaque, func: *const fn (?*anyopaque) callconv(.c) void) void {
         objc.dispatchAfter(ms * std.time.ns_per_ms, ctx, func);
+    }
+
+    /// Calls `func(ctx)` repeatedly on the main run loop in common modes.
+    pub fn every(ms: u64, ctx: ?*anyopaque, func: *const fn (?*anyopaque) callconv(.c) void) ?*Timer {
+        return app_timer.every(ms, ctx, func);
     }
 
     /// Main thread only: calls `func(ctx)` once the current event (and any

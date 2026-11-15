@@ -53,3 +53,45 @@ test "a hole cuts the frame clear, corners rounded; what follows draws over it" 
         try testing.expectEqual([4]u8{ 0, 0, 0, 0 }, cpu[(@as(usize, @intFromFloat(60 * t.scale)) * shown.width + @as(usize, @intFromFloat(70 * t.scale))) * 4 ..][0..4].*);
     }
 }
+
+const ManyHoles = struct {
+    ids: [12]u64 = @splat(0),
+    overlay: bool = false,
+
+    fn view(s: *ManyHoles, c: *ui.Context) void {
+        const root = ui.div(c).column().sizeFull().gap(2);
+        defer root.end();
+        for (&s.ids, 0..) |*id, i| {
+            const box = ui.div(c).w(40).h(8);
+            defer box.end();
+            id.* = ui.hole(c, c.print("stage-{d}", .{i}), 0);
+        }
+        if (s.overlay) {
+            const overlay = ui.div(c).absolute().sizeFull();
+            _ = overlay.interaction();
+            overlay.end();
+        }
+    }
+};
+
+test "more than four stage holes register and an interactive overlay covers them" {
+    var s: ManyHoles = .{};
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&s, ManyHoles.view), .{ .width = 80, .height = 140 });
+    defer t.deinit();
+    t.frame();
+
+    try testing.expectEqual(s.ids.len, t.ctx.stage_count);
+    for (s.ids, 0..) |id, i| {
+        const rect = t.ctx.rects.get(id) orelse return error.MissingHoleRect;
+        try testing.expectEqual(rect, t.ctx.stage_rects[i]);
+        try testing.expect(t.ctx.inStageHoleAt(.{ .x = rect.x + rect.w / 2, .y = rect.y + rect.h / 2 }));
+    }
+
+    s.overlay = true;
+    t.frame();
+    for (s.ids) |id| {
+        const rect = t.ctx.rects.get(id) orelse return error.MissingHoleRect;
+        try testing.expect(!t.ctx.inStageHoleAt(.{ .x = rect.x + rect.w / 2, .y = rect.y + rect.h / 2 }));
+    }
+}

@@ -76,7 +76,15 @@ pub const shell = struct {
     }
 
     pub fn beep() void {}
+
+    pub fn setCursorVisible(visible: bool) void {
+        if (visible == cursor_visible) return;
+        _ = w.ShowCursor(if (visible) 1 else 0);
+        cursor_visible = visible;
+    }
 };
+
+var cursor_visible = true;
 
 pub const Directory = enum { data, cache, home, documents, downloads, desktop, temp };
 

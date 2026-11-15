@@ -11,6 +11,7 @@ const ui = @import("../ui/ui.zig");
 const tsgen = @import("../tsgen.zig");
 const ipc = @import("../ipc.zig").ipc(window_mod.Window, App);
 const Window = window_mod.Window;
+const app_timer = @import("../app_timer_none.zig");
 
 pub const Options = struct {
     name: []const u8 = "nanoui",
@@ -26,12 +27,17 @@ pub const Options = struct {
     on_terminate: ?*const fn (ctx: ?*anyopaque) void = null,
     on_continue_activity: ?*const fn (ctx: ?*anyopaque, url: []const u8) void = null,
     on_active: ?*const fn (ctx: ?*anyopaque, active: bool) void = null,
+    on_appearance_change: ?*const fn (ctx: ?*anyopaque, dark: bool) void = null,
+    on_sleep: ?*const fn (ctx: ?*anyopaque) void = null,
+    on_wake: ?*const fn (ctx: ?*anyopaque) void = null,
 };
 
 /// GTK 4's main loop, while it runs.
 var main_loop: ?*anyopaque = null;
 
 pub const App = struct {
+    pub const Timer = app_timer.Timer;
+
     gpa: std.mem.Allocator,
     io: std.Io,
     options: Options,
@@ -308,8 +314,12 @@ pub const App = struct {
         _ = schedule(ms, ctx, func);
     }
 
+    pub fn every(ms: u64, ctx: ?*anyopaque, func: *const fn (?*anyopaque) callconv(.c) void) ?*Timer {
+        return app_timer.every(ms, ctx, func);
+    }
+
     fn schedule(ms: u64, ctx: ?*anyopaque, func: *const fn (?*anyopaque) callconv(.c) void) bool {
-        const Timer = struct {
+        const PendingTimer = struct {
             ctx: ?*anyopaque,
             func: *const fn (?*anyopaque) callconv(.c) void,
             fn fire(data: ?*anyopaque) callconv(.c) c_int {
@@ -320,9 +330,9 @@ pub const App = struct {
             }
         };
         if (!gtk.load()) return false;
-        const t = std.heap.c_allocator.create(Timer) catch return false;
+        const t = std.heap.c_allocator.create(PendingTimer) catch return false;
         t.* = .{ .ctx = ctx, .func = func };
-        if (gtk.api.g_timeout_add(@intCast(ms), Timer.fire, t) == 0) {
+        if (gtk.api.g_timeout_add(@intCast(ms), PendingTimer.fire, t) == 0) {
             std.heap.c_allocator.destroy(t);
             return false;
         }

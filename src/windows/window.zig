@@ -47,6 +47,25 @@ const class_name = std.unicode.utf8ToUtf16LeStringLiteral("NanoUIWindow");
 var registered = false;
 
 pub const Window = struct {
+    pub fn performClose(self: *Window) void {
+        @import("../window_tabs_none.zig").performClose(self);
+    }
+    pub fn addTab(self: *Window, other: *Window, after: bool) bool {
+        return @import("../window_tabs_none.zig").addTab(self, other, after);
+    }
+    pub fn tabCount(self: *const Window) usize {
+        return @import("../window_tabs_none.zig").tabCount(self);
+    }
+    pub fn tabIndex(self: *const Window) ?usize {
+        return @import("../window_tabs_none.zig").tabIndex(self);
+    }
+    pub fn tabAt(self: *const Window, index: usize) ?*Window {
+        return @import("../window_tabs_none.zig").tabAt(self, index);
+    }
+    pub fn moveTab(self: *Window, delta: isize) bool {
+        return @import("../window_tabs_none.zig").moveTab(self, delta);
+    }
+
     app: *App,
     /// Null when headless (snapshots).
     hwnd: ?w.HWND = null,

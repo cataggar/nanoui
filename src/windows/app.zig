@@ -11,6 +11,7 @@ const ui = @import("../ui/ui.zig");
 const tsgen = @import("../tsgen.zig");
 const ipc = @import("../ipc.zig").ipc(window_mod.Window, App);
 const Window = window_mod.Window;
+const app_timer = @import("../app_timer_none.zig");
 
 // `CoInitializeEx`: COM's apartment, which WebView2 needs on the thread that
 // makes it. `COINIT_APARTMENTTHREADED` is what a windowed UI wants.
@@ -31,6 +32,9 @@ pub const Options = struct {
     on_terminate: ?*const fn (ctx: ?*anyopaque) void = null,
     on_continue_activity: ?*const fn (ctx: ?*anyopaque, url: []const u8) void = null,
     on_active: ?*const fn (ctx: ?*anyopaque, active: bool) void = null,
+    on_appearance_change: ?*const fn (ctx: ?*anyopaque, dark: bool) void = null,
+    on_sleep: ?*const fn (ctx: ?*anyopaque) void = null,
+    on_wake: ?*const fn (ctx: ?*anyopaque) void = null,
     /// The Mac's (a menu bar app with no Dock icon); every Windows app is
     /// `.regular`, and one with `skip_taskbar` windows and a tray is the
     /// accessory kind.
@@ -39,8 +43,8 @@ pub const Options = struct {
 
 pub const Activation = enum { regular, accessory };
 
-const Timer = struct { id: usize, ctx: ?*anyopaque, func: *const fn (?*anyopaque) callconv(.c) void };
-var timers: [64]?Timer = @splat(null);
+const PendingTimer = struct { id: usize, ctx: ?*anyopaque, func: *const fn (?*anyopaque) callconv(.c) void };
+var timers: [64]?PendingTimer = @splat(null);
 
 fn onTimer(_: ?w.HWND, _: u32, id: usize, _: u32) callconv(.winapi) void {
     _ = w.KillTimer(null, id);
@@ -60,6 +64,8 @@ fn clearTimers() void {
 }
 
 pub const App = struct {
+    pub const Timer = app_timer.Timer;
+
     gpa: std.mem.Allocator,
     io: std.Io,
     options: Options,
@@ -382,7 +388,7 @@ pub const App = struct {
     pub fn after(ms: u64, ctx: ?*anyopaque, func: *const fn (?*anyopaque) callconv(.c) void) void {
         // A slot first: a timer with nowhere to be remembered would fire once
         // into nothing, its callback silently dropped.
-        var slot: ?*?Timer = null;
+        var slot: ?*?PendingTimer = null;
         for (&timers) |*t| if (t.* == null) {
             slot = t;
             break;
@@ -394,6 +400,10 @@ pub const App = struct {
         const id = w.SetTimer(null, 0, @intCast(@max(1, ms)), onTimer);
         if (id == 0) return;
         s.* = .{ .id = id, .ctx = ctx, .func = func };
+    }
+
+    pub fn every(ms: u64, ctx: ?*anyopaque, func: *const fn (?*anyopaque) callconv(.c) void) ?*Timer {
+        return app_timer.every(ms, ctx, func);
     }
 
     pub fn setMenu(self: *App, template: []const menu_mod.MenuItem) !void {
