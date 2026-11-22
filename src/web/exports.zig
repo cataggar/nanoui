@@ -56,18 +56,20 @@ export fn nanoui_web_pinch(x: f32, y: f32, scale: f32, dx: f32, dy: f32) void {
     s.requestFrame();
 }
 
-/// Send at most one keyboard edge per frame. Kind 3 updates modifiers
-/// alone. `code` is a Shortcut key and `typed` is the actual character.
-export fn nanoui_web_key(kind: u32, code: u32, mods: u32, typed: u32) void {
-    const s = web.active orelse return;
+/// Keyboard events from the browser. `kind`: 0=keydown, 1=keyup, 2=blur,
+/// 3=modifiers-only. `code` is a Shortcut key and `typed` is the character
+/// codepoint. Returns 1 when nanoui consumed the key (`preventDefault()`).
+export fn nanoui_web_key(kind: u32, code: u32, mods: u32, typed: u32) u32 {
+    const s = web.active orelse return 0;
+    if (s.lost) return 0;
     const c = &s.ctx;
     c.key_up_supported = true;
     if (kind == 2) {
         c.input.releaseKeys();
         s.requestFrame();
-        return;
+        return 0;
     }
-    if (code > 0x10ffff or typed > 0x10ffff) return;
+    if (code > 0x10ffff or typed > 0x10ffff) return 0;
     const Sc = ui.Shortcut;
     const shortcut: Sc = .{
         .key = Sc.keyOf(@intCast(code)),
@@ -76,46 +78,91 @@ export fn nanoui_web_key(kind: u32, code: u32, mods: u32, typed: u32) void {
         .alt = mods & 4 != 0,
         .cmd = mods & 8 != 0,
     };
-    c.input.mods_changed = c.input.mods_changed or c.input.shift != shortcut.shift or
-        c.input.ctrl != shortcut.ctrl or c.input.alt != shortcut.alt or c.input.cmd != shortcut.cmd;
-    c.input.shift = shortcut.shift;
-    c.input.ctrl = shortcut.ctrl;
-    c.input.alt = shortcut.alt;
-    c.input.cmd = shortcut.cmd;
+    if (kind == 0 and c.focused_text != null) {
+        @import("exports_input.zig").flushPendingKeyToOps(s);
+    }
+    const has_pending_keydown = c.input.key != null or c.input.shortcut != null;
+    if (kind == 0 or !has_pending_keydown) {
+        c.input.mods_changed = c.input.mods_changed or c.input.shift != shortcut.shift or
+            c.input.ctrl != shortcut.ctrl or c.input.alt != shortcut.alt or c.input.cmd != shortcut.cmd;
+        c.input.shift = shortcut.shift;
+        c.input.ctrl = shortcut.ctrl;
+        c.input.alt = shortcut.alt;
+        c.input.cmd = shortcut.cmd;
+    }
     if (kind == 1) {
         c.input.queueKeyUp(c.gpa, shortcut);
-    } else if (kind == 0) {
-        c.input.repeat = mods & 16 != 0;
-        if (c.focused_text == null or (shortcut.ctrl and !shortcut.alt and (shortcut.key == 'z' or shortcut.key == 'y')))
-            c.input.shortcut = shortcut;
-        c.input.key = switch (shortcut.key) {
-            Sc.backspace => .backspace,
-            Sc.forward_delete => .delete,
-            Sc.left => .left,
-            Sc.right => .right,
-            Sc.up => .up,
-            Sc.down => .down,
-            Sc.home => .home,
-            Sc.end => .end,
-            Sc.enter => .enter,
-            Sc.tab => .tab,
-            Sc.escape => .escape,
-            Sc.page_up => .page_up,
-            Sc.page_down => .page_down,
-            Sc.f(1)...Sc.f(12) => @fromBackingInt(@intCast(@backingInt(Key.f1) + shortcut.key - Sc.f(1))),
+        s.requestFrame();
+        return 0;
+    }
+    if (kind != 0) {
+        s.requestFrame();
+        return 0;
+    }
+    c.input.repeat = mods & 16 != 0;
+    const mapped_key: ?Key = switch (shortcut.key) {
+        Sc.backspace => .backspace,
+        Sc.forward_delete => .delete,
+        Sc.left => .left,
+        Sc.right => .right,
+        Sc.up => .up,
+        Sc.down => .down,
+        Sc.home => .home,
+        Sc.end => .end,
+        Sc.enter => .enter,
+        Sc.tab => .tab,
+        Sc.escape => .escape,
+        Sc.page_up => .page_up,
+        Sc.page_down => .page_down,
+        Sc.f(1)...Sc.f(12) => @fromBackingInt(@intCast(@backingInt(Key.f1) + shortcut.key - Sc.f(1))),
+        else => null,
+    };
+    const is_fkey = shortcut.key >= Sc.f(1) and shortcut.key <= Sc.f(12);
+    var consumed = shortcut.key == Sc.tab or shortcut.key == Sc.escape;
+    if (c.focused_text == null) {
+        if (shortcut.key != 0) c.input.shortcut = shortcut;
+        c.input.key = mapped_key;
+        s.requestFrame();
+        return @intFromBool(consumed);
+    }
+    s.pending_text_valid = false;
+    if (shortcut.cmd and !shortcut.ctrl and !shortcut.alt) {
+        const line_cmd: ?ui.Command = switch (shortcut.key) {
+            Sc.left => if (shortcut.shift) .select_line_start else .move_line_start,
+            Sc.right => if (shortcut.shift) .select_line_end else .move_line_end,
+            Sc.backspace => .delete_to_line_start,
+            Sc.forward_delete => .delete_to_line_end,
             else => null,
         };
-        if (c.focused_text != null) {
-            if (shortcut.ctrl and !shortcut.alt and !shortcut.shift and shortcut.key == 'a') {
-                s.text_op[0] = .{ .command = .select_all };
-                c.input.ops = &s.text_op;
-            } else if (typed != 0 and !shortcut.ctrl) {
-                const len = std.unicode.utf8Encode(@intCast(typed), &s.key_text) catch 0;
-                c.input.chars = s.key_text[0..len];
-            }
+        if (line_cmd) |cmd| {
+            s.pending_ops.append(s.gpa, .{ .command = cmd }) catch {};
+            s.requestFrame();
+            return 1;
         }
     }
+    if (shortcut.ctrl and !shortcut.alt and !shortcut.shift and shortcut.key == 'a') {
+        s.pending_ops.append(s.gpa, .{ .command = .select_all }) catch {};
+        s.requestFrame();
+        return 1;
+    }
+    if (shortcut.ctrl or shortcut.cmd or shortcut.alt or shortcut.key == Sc.escape or is_fkey) {
+        if (shortcut.key != 0) c.input.shortcut = shortcut;
+    }
+    if (mapped_key) |k| {
+        c.input.key = k;
+        consumed = true;
+    } else if (typed != 0 and !shortcut.ctrl and !shortcut.cmd) {
+        var enc: [4]u8 = undefined;
+        const len = std.unicode.utf8Encode(@intCast(typed), &enc) catch 0;
+        if (len > 0) {
+            s.pending_chars.appendSlice(s.gpa, enc[0..len]) catch {};
+            consumed = true;
+        }
+    } else if (shortcut.ctrl or shortcut.cmd) {
+        consumed = true;
+    }
     s.requestFrame();
+    return @intFromBool(consumed);
 }
 
 export fn nanoui_web_wheel(x: f32, y: f32, dx: f32, dy: f32) void {
@@ -128,7 +175,11 @@ export fn nanoui_web_wheel(x: f32, y: f32, dx: f32, dy: f32) void {
 }
 
 export fn nanoui_web_device_lost() void {
-    if (web.active) |s| s.lost = true;
+    if (web.active) |s| {
+        s.lost = true;
+        s.clearPendingInput();
+        s.ctx.input.releaseKeys();
+    }
 }
 export fn nanoui_web_device() u32 {
     const s = web.active orelse return 0;

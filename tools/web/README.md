@@ -1,8 +1,8 @@
-# WebGPU target
+# WebGPU and WebGL2 target
 
 The browser renderer and minimal canvas host build for single-threaded
-`wasm32-wasi` with Zig 0.17. They began as a port of the earlier 0.11
-WebGPU experiment to the current renderer.
+`wasm32-wasi` with Zig 0.17. WebGPU is preferred when available, with an
+automatic non-destructive fallback to WebGL2 (`#version 300 es`).
 
 The renderer consumes the current **192-byte** `gpu.Instance`, including
 subtree matrices, and respects `Texture.encoding` (`auto`, `display_sdr`,
@@ -25,9 +25,10 @@ node tools/web/serve.mjs
 ```
 
 Open the printed loopback URL with `/index.html` (counter) or
-`/index.html?app=gallery`. There is no CPU presentation fallback. The tests
-fail on missing WebGPU, any shader diagnostic or validation error. Linux CI
-uses pinned Playwright 1.63.0 with SwiftShader and the same checks.
+`/index.html?app=gallery` (plus optional `?gpu=webgpu|webgl2` and
+`?ime=editcontext|textarea`). There is no CPU presentation fallback.
+`parity.mjs` runs every scene on both WebGPU and WebGL2 against CPU pixels.
+Linux CI uses pinned Playwright 1.63.0 with SwiftShader and the same checks.
 
 `NANOUI_GPU=hardware node tools/web/parity.mjs` selects ANGLE Metal on this
 Mac and adds H.264/HEVC decode tests. `NANOUI_ENGINE=webkit` selects WebKit.
@@ -52,23 +53,28 @@ must be single-threaded and link libc. In JavaScript:
 
 ```js
 import {start} from './nanoui.js';
-const runtime = await start({canvas, url: './my-app.wasm', device});
+const runtime = await start({canvas, url: './my-app.wasm', gpu: 'auto', ime: 'auto', device});
 ```
 
-Omit `device` to have nanoui acquire and recover one. Injecting a device
-leaves its ownership/recovery to the app; call `await runtime.setDevice(next)`
+`gpu` accepts `'auto'` (default: WebGPU, falling back cleanly to WebGL2
+without locking the canvas), `'webgpu'` or `'webgl2'`. Omit `device` to have
+nanoui acquire and recover a `GPUDevice` or `WebGL2RenderingContext`.
+Injecting a device leaves ownership to the app; call `await runtime.setDevice(next)`
 after replacement. `runtime.destroy()` frees renderer resources and only
-an owned device. OffscreenCanvas/Workers use the same API (`worker.js`).
+an owned `GPUDevice`. OffscreenCanvas/Workers use the same API (`worker.js`).
 
 `ui.webgpuDevice()` and `ui.webgpuDeviceGeneration()` identify the shared
-GPUDevice. `runtime.gpu.objects.put/get/drop` bridges app objects as handles.
+device/context. `runtime.gpu.objects.put/get/drop` bridges app objects as
+handles (on WebGL2, `runtime.gpu.wrapTexture(glTex, w, h, opts)` wraps raw
+`WebGLTexture` handles).
 Pass `true` as the second argument to `put` for textures that will keep the
 same contents for their entire lifetime. Decoded `VideoFrame` objects are
 already treated as immutable.
-`Texture.web_texture` borrows a GPUTexture; `web_external` borrows a VideoFrame
-or video element. Keep them alive until the frame is submitted. Ordinary
-`VideoFrame` sources import directly. Padded frames are cropped, and video
-elements use the normalized copy path to bridge decoder backends. Native two-plane formats are not web sources.
+`Texture.web_texture` borrows a `GPUTexture` or wrapped `WebGLTexture`;
+`web_external` borrows a `VideoFrame` or video element. Keep them alive until
+the frame is submitted. Ordinary `VideoFrame` sources import directly. Padded
+frames are cropped, and video elements use the normalized copy path to bridge
+decoder backends. Native two-plane formats are not web sources.
 
 `Surface.before_encode` receives the GPUCommandEncoder's handle as a
 pointer-sized integer; app JS resolves it through the object table.
@@ -79,13 +85,17 @@ readback; keep output memory and callback context alive until completion.
 `Surface.recordFrames` enables CPU/GPU timing; `gpu.stats` exposes recent
 samples. The timestamp readback pool is bounded and never blocks a frame.
 
-The host handles pointer and wheel input, pinch gestures, resize/DPR and
-device recovery. The canvas delivers pinch scale and midpoint through
-`Context.input.zoom` and `mouse`, and two-finger translation through `pan`.
-A pinch cancels any active touch pointer drag rather than releasing it.
-Workers can forward a pinch through `runtime.host.pinch(x, y, scale, dx, dy)`.
-Keyboard/IME, clipboard, dialogs, filesystem, multi-window and a complete
-App/Window platform remain separate work. Opaque desktop handle types let
-shared app state compile without creating desktop windows in the browser.
+The host handles pointer and wheel input, pinch gestures, keyboard and
+shortcuts (keeping browser-reserved chords intact), `EditContext` IME with a
+hidden `<textarea>` fallback (`ime: 'auto' | 'editcontext' | 'textarea'`,
+detached on password fields), DOM and async clipboard integration, cursor
+styles, resize/DPR, and WebGPU/WebGL2 device/context-loss recovery. The
+canvas delivers pinch scale and midpoint through `Context.input.zoom` and
+`mouse`, and two-finger translation through `pan`. A pinch cancels any active
+touch pointer drag rather than releasing it. Workers can forward pointer,
+pinch, wheel, and key events (`worker.js`). Dialogs, filesystem, multi-window
+and a complete App/Window platform remain separate work. Opaque desktop handle
+types let shared app state compile without creating desktop windows in the
+browser.
 
 See [MEASUREMENTS.md](MEASUREMENTS.md) for verification scope.

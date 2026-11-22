@@ -6,7 +6,8 @@ const api = @import("webgpu_api.zig");
 const common = @import("webgpu_target.zig");
 const color = @import("color.zig");
 const LutCache = @import("webgpu_lut.zig").Cache;
-const post_source = @embedFile("texture_post.wgsl");
+const post_wgsl = @embedFile("texture_post.wgsl");
+const post_glsl = @embedFile("texture_post.glsl");
 
 pub const Slot = struct {
     texture: api.Handle = 0,
@@ -46,7 +47,8 @@ pub const Textures = struct {
     }
     pub fn initPost(t: *Textures, external_layout: api.Handle) void {
         if (t.shader != 0) return;
-        t.shader = api.shader_create(post_source.ptr, post_source.len);
+        const code: []const u8 = if (api.backend() == 1) post_glsl else post_wgsl;
+        t.shader = api.shader_create(code.ptr, @intCast(code.len));
         const entries = [_]api.LayoutEntry{
             .{ .binding = 0, .visibility = 2, .kind = 0 },
             .{ .binding = 2, .visibility = 2, .kind = 2 },

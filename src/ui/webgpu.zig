@@ -9,7 +9,8 @@ const damage = @import("webgpu_damage.zig");
 const passes = @import("webgpu_passes.zig");
 pub const Target = @import("webgpu_target.zig").Target;
 pub const Params = @import("webgpu_target.zig").Params;
-const source = @embedFile("shader.wgsl") ++ "\n" ++ @embedFile("shader_shapes.wgsl") ++ "\n" ++ @embedFile("glass.wgsl");
+const wgsl_source = @embedFile("shader.wgsl") ++ "\n" ++ @embedFile("shader_shapes.wgsl") ++ "\n" ++ @embedFile("glass.wgsl");
+const glsl_source = @embedFile("webgl2.glsl") ++ "\n" ++ @embedFile("webgl2_shapes.glsl") ++ "\n" ++ @embedFile("webgl2_glass.glsl");
 comptime {
     std.debug.assert(@sizeOf(gpu.Instance) == 192);
     std.debug.assert(@offsetOf(gpu.Instance, "radius") == 80 and @offsetOf(gpu.Instance, "xf") == 96 and @offsetOf(gpu.Instance, "turn") == 144);
@@ -55,7 +56,8 @@ pub const Renderer = struct {
 
     pub fn init() !Renderer {
         _ = device.get() orelse return error.NoWebGPUDevice;
-        const shader = api.shader_create(source.ptr, source.len);
+        const code: []const u8 = if (api.backend() == 1) glsl_source else wgsl_source;
+        const shader = api.shader_create(code.ptr, @intCast(code.len));
         const entries = [_]api.LayoutEntry{
             .{ .binding = 0, .visibility = 3, .kind = 0 },
             .{ .binding = 1, .visibility = 3, .kind = 1 },

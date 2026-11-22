@@ -38,6 +38,7 @@ export function createGPU({ device, memory, done, format = "bgra8unorm", generat
   device.addEventListener("uncapturederror", event => diagnostics.push(event.error.message));
 
   const imports = {
+    backend: () => 0,
     device: () => deviceHandle,
     device_generation: () => generation,
     preferred_format: () => formats.indexOf(format),
@@ -173,7 +174,7 @@ export function createGPU({ device, memory, done, format = "bgra8unorm", generat
     },
   };
   return {
-    imports, objects, diagnostics,
+    backend: "webgpu", imports, objects, diagnostics,
     get device() { return device; },
     get generation() { return generation; },
     get stats() { return timing.stats; },

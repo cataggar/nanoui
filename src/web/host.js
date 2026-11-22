@@ -1,7 +1,22 @@
-// Canvas lifecycle and event delivery. Applications opt in to keyboard
-// events so they can keep the browser's own shortcuts where appropriate.
-export function createHost(canvas, options = {}) {
+// Canvas lifecycle, keyboard/IME/clipboard attachment, and event delivery.
+import { createInput } from "./input.js";
+
+const clipboardDecoder = new TextDecoder();
+const CURSORS = [
+  "default", "pointer", "text", "ew-resize", "ns-resize",
+  "grab", "grabbing", "not-allowed", "crosshair", "default",
+];
+
+export function createHost(canvasOrOptions, maybeOptions = {}) {
+  const isOptionsBag = Boolean(
+    canvasOrOptions && typeof canvasOrOptions === "object" &&
+    "canvas" in canvasOrOptions && typeof canvasOrOptions.getContext !== "function" &&
+    typeof canvasOrOptions.addEventListener !== "function",
+  );
+  const options = isOptionsBag ? canvasOrOptions : maybeOptions;
+  const canvas = isOptionsBag ? options.canvas : canvasOrOptions;
   let runtime, context, frame = null, timer = null, observer, media;
+  let inputController = null, lastClipboardText = "", lastCursor = "default", webglContextWatched = false;
   let stopped = false, lost = false, paused = true, generation = 0, forceRecovery = false;
   const listeners = [];
   const inputEvents = [];
@@ -10,6 +25,47 @@ export function createHost(canvas, options = {}) {
   const raf = options.requestAnimationFrame ?? globalThis.requestAnimationFrame.bind(globalThis);
   const caf = options.cancelAnimationFrame ?? globalThis.cancelAnimationFrame.bind(globalThis);
   const on = (object, name, fn, opts) => { object.addEventListener(name, fn, opts); listeners.push(() => object.removeEventListener(name, fn, opts)); };
+  const getMemory = () => options.memory?.() ?? runtime?.exports?.memory ?? runtime?.memory ?? null;
+  const isWebGL2 = () => runtime?.backend === "webgl2" || runtime?.gpu?.imports?.backend?.() === 1;
+
+  function syncCursor() {
+    if (!canvas?.style || !runtime?.exports?.nanoui_web_cursor) return;
+    const next = CURSORS[runtime.exports.nanoui_web_cursor()] ?? "default";
+    if (next !== lastCursor) {
+      lastCursor = next;
+      canvas.style.cursor = next;
+    }
+  }
+
+  function runFrame(time = performance.now()) {
+    if (stopped || lost || !runtime) return 0;
+    // Preserve button transitions across frames. A quick down/up in
+    // one browser task must still produce a pressed frame for drags.
+    while (inputEvents.length) {
+      const event = inputEvents.shift();
+      if (event[0] === "pinch") runtime.exports.nanoui_web_pinch(...event.slice(1));
+      else if (event[0] === "key") runtime.exports.nanoui_web_key(...event.slice(1));
+      else runtime.exports.nanoui_web_pointer(...event);
+      if (event[0] !== 0 && !(event[0] === "key" && event[1] === 3)) break;
+    }
+    const submitted = runtime.gpu?.stats?.frames;
+    const more = runtime.exports.nanoui_web_frame(time);
+    const sample = runtime.gpu?.stats?.samples?.at(-1);
+    if (sample && runtime.gpu.stats.frames !== submitted) {
+      sample.log_index = runtime.exports.nanoui_web_last_record();
+    }
+    syncCursor();
+    inputController?.syncAfterFrame();
+    return more;
+  }
+
+  function flushFrame() {
+    if (stopped || lost || paused || !runtime) return false;
+    const more = runFrame(performance.now());
+    if (more || inputEvents.length) request();
+    return true;
+  }
+
   function request() {
     if (stopped || lost || paused || frame !== null) return;
     if (timer !== null) { clearTimeout(timer); timer = null; }
@@ -19,20 +75,8 @@ export function createHost(canvas, options = {}) {
       // A device replacement pauses until its pipelines compile; a frame
       // queued before it must not draw with the placeholders.
       if (!stopped && !lost && !paused) {
-        // Preserve button transitions across frames. A quick down/up in
-        // one browser task must still produce a pressed frame for drags.
-        while (inputEvents.length) {
-          const event = inputEvents.shift();
-          if (event[0] === "pinch") runtime.exports.nanoui_web_pinch(...event.slice(1));
-          else if (event[0] === "key") runtime.exports.nanoui_web_key(...event.slice(1));
-          else runtime.exports.nanoui_web_pointer(...event);
-          if (event[0] !== 0 && !(event[0] === "key" && event[1] === 3)) break;
-        }
-        const submitted = runtime.gpu.stats.frames;
-        const more=runtime.exports.nanoui_web_frame(time);
-        const sample=runtime.gpu.stats.samples.at(-1);
-        if(sample && runtime.gpu.stats.frames !== submitted)sample.log_index=runtime.exports.nanoui_web_last_record();
-        if(more || inputEvents.length)request();
+        const more = runFrame(time);
+        if (more || inputEvents.length) request();
       }
     });
   }
@@ -84,12 +128,36 @@ export function createHost(canvas, options = {}) {
     request();
   }
   function configure() {
+    if (!runtime?.gpu) return;
+    if (isWebGL2()) {
+      runtime.gpu.setCanvas(canvas);
+      return;
+    }
     context.configure({ device: runtime.gpu.device, format: options.format,
       alphaMode: "opaque", usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC | GPUTextureUsage.COPY_DST });
     runtime.gpu.setCanvas(context);
   }
   function watchDevice() {
-    const device = runtime.gpu.device;
+    if (isWebGL2()) {
+      if (webglContextWatched || !canvas?.addEventListener) return;
+      webglContextWatched = true;
+      on(canvas, "webglcontextlost", e => {
+        e.preventDefault();
+        if (stopped) return;
+        lost = true;
+        runtime?.exports?.nanoui_web_device_lost?.();
+        if (frame !== null) { caf(frame); frame = null; }
+        if (timer !== null) { clearTimeout(timer); timer = null; }
+        options.onDeviceLost?.({ backend: "webgl2", reason: "webglcontextlost" });
+      });
+      on(canvas, "webglcontextrestored", () => {
+        if (stopped || !runtime?.gpu) return;
+        setDevice(runtime.gpu.device).catch(error => options.onError?.(error));
+      });
+      return;
+    }
+    const device = runtime?.gpu?.device;
+    if (!device?.lost?.then) return;
     const current = ++generation;
     device.lost.then(async info => {
       if (stopped || current !== generation) return;
@@ -113,24 +181,55 @@ export function createHost(canvas, options = {}) {
     if (timer !== null) { clearTimeout(timer); timer = null; }
     runtime.gpu.setDevice(device);
     configure();
-    if (runtime.exports.nanoui_web_device()) throw new Error("Could not recreate WebGPU renderer");
+    if (runtime.exports.nanoui_web_device()) throw new Error("Could not recreate GPU renderer");
     await runtime.gpu.ready();
     lost = false; paused = false;
     watchDevice();
     request();
   }
+  function clipboardWrite(ptr, len) {
+    const mem = getMemory();
+    lastClipboardText = mem && len > 0 ? clipboardDecoder.decode(new Uint8Array(mem.buffer, ptr, len)) : "";
+    inputController?.onClipboardWrite(lastClipboardText);
+  }
   return {
-    stats, unwind, requestFrame: request, resize, pointer, wheel, pinch, key, setDevice,
-    imports: { request_frame: request, request_after: after, now_ms: () => performance.now(), run_forever() { throw unwind; } },
+    stats, unwind, requestFrame: request, frame: runFrame, flushFrame, resize, pointer, wheel, pinch, key, setDevice,
+    get clipboardText() { return lastClipboardText; },
+    get input() { return inputController; },
+    imports: {
+      request_frame: request,
+      request_after: after,
+      now_ms: () => performance.now(),
+      clipboard_write: clipboardWrite,
+      run_forever() { throw unwind; },
+    },
     attach(value) {
-      runtime = value;
-      context = canvas.getContext("webgpu");
-      if (!context) throw new Error("Canvas WebGPU context is unavailable");
-      configure();
-      runtime.gpu.onTiming(sample=>{
-        if(sample.log_index!==undefined && sample.log_index!==0xffffffff)runtime.exports.nanoui_web_gpu_time(sample.log_index,sample.gpu_ms);
-      });
-      watchDevice();
+      runtime = value?.exports ? value : { exports: value, gpu: null };
+      if (runtime.gpu) {
+        if (!isWebGL2()) {
+          context = canvas.getContext("webgpu");
+          if (!context) throw new Error("Canvas WebGPU context is unavailable");
+        }
+        configure();
+        runtime.gpu.onTiming?.(sample => {
+          if (sample.log_index !== undefined && sample.log_index !== 0xffffffff) {
+            runtime.exports.nanoui_web_gpu_time(sample.log_index, sample.gpu_ms);
+          }
+        });
+        watchDevice();
+      }
+      inputController?.destroy();
+      inputController = null;
+      if (typeof document !== "undefined" && canvas?.addEventListener) {
+        inputController = createInput({
+          canvas,
+          exports: runtime.exports,
+          memory: getMemory,
+          ime: options.ime ?? "auto",
+          requestFrame: request,
+          flushFrame,
+        });
+      }
     },
     listen() {
       paused = false;
@@ -218,19 +317,33 @@ export function createHost(canvas, options = {}) {
         listeners.push(() => media?.removeEventListener("change", dprChanged));
       }
     },
-    debugLoseDevice() { forceRecovery = true; runtime.gpu.device.destroy(); },
+    debugLoseDevice() {
+      if (runtime?.gpu?.device?.destroy) {
+        forceRecovery = true;
+        runtime.gpu.device.destroy();
+      } else {
+        const ext = runtime?.gpu?.device?.getExtension?.("WEBGL_lose_context");
+        if (ext) {
+          ext.loseContext();
+          setTimeout(() => { if (!stopped) ext.restoreContext(); }, 30);
+        }
+      }
+    },
     destroy() {
       if (stopped) return;
       stopped = true; generation++;
-      inputEvents.length=0;
+      inputEvents.length = 0;
       if (frame !== null) caf(frame);
       if (timer !== null) clearTimeout(timer);
       observer?.disconnect();
+      inputController?.destroy();
+      inputController = null;
+      if (canvas?.style) canvas.style.cursor = "";
       for (const off of listeners) off();
-      runtime?.exports.nanoui_web_destroy();
-      context?.unconfigure();
-      runtime?.gpu.dispose();
-      if(options.ownsDevice)runtime?.device.destroy();
+      runtime?.exports?.nanoui_web_destroy?.();
+      context?.unconfigure?.();
+      runtime?.gpu?.dispose?.();
+      if (options.ownsDevice) runtime?.device?.destroy?.();
     },
   };
 }
