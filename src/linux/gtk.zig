@@ -34,6 +34,7 @@ pub const Api = struct {
     g_object_ref_sink: *const fn (obj: *anyopaque) callconv(.c) *anyopaque,
     g_object_new: *const fn (kind: usize, first_property: ?[*:0]const u8, ...) callconv(.c) ?*anyopaque,
     g_object_get: *const fn (obj: *anyopaque, first_property: [*:0]const u8, ...) callconv(.c) void,
+    g_signal_handlers_disconnect_matched: *const fn (instance: *anyopaque, mask: c_uint, id: c_uint, detail: c_uint, closure: ?*anyopaque, func: ?*anyopaque, data: ?*anyopaque) callconv(.c) c_uint,
     g_signal_handler_disconnect: *const fn (instance: *anyopaque, id: c_ulong) callconv(.c) void,
     g_memory_input_stream_new_from_data: *const fn (data: [*]const u8, len: isize, destroy: ?*anyopaque) callconv(.c) *anyopaque,
     g_slist_free: *const fn (list: ?*anyopaque) callconv(.c) void,
@@ -64,6 +65,7 @@ pub const Api = struct {
     gtk_widget_remove_tick_callback: *const fn (w: *Widget, id: c_uint) callconv(.c) void,
     gtk_drawing_area_new: *const fn () callconv(.c) *Widget,
     gtk_im_multicontext_new: *const fn () callconv(.c) *anyopaque,
+    gtk_im_context_reset: *const fn (im: *anyopaque) callconv(.c) void,
     gtk_im_context_focus_in: *const fn (im: *anyopaque) callconv(.c) void,
     gtk_im_context_focus_out: *const fn (im: *anyopaque) callconv(.c) void,
     gtk_im_context_set_cursor_location: *const fn (im: *anyopaque, rect: *const Rectangle) callconv(.c) void,
@@ -120,6 +122,8 @@ pub const Api3 = struct {
     gtk_widget_add_events: *const fn (w: *Widget, mask: c_int) callconv(.c) void,
     gtk_widget_set_can_focus: *const fn (w: *Widget, on: c_int) callconv(.c) void,
     gtk_widget_get_window: *const fn (w: *Widget) callconv(.c) ?*anyopaque,
+    gtk_widget_get_has_window: *const fn (w: *Widget) callconv(.c) c_int,
+    gtk_widget_get_allocation: *const fn (w: *Widget, allocation: *Rectangle) callconv(.c) void,
     gtk_container_add: *const fn (container: *Widget, child: *Widget) callconv(.c) void,
     gtk_im_context_set_client_window: *const fn (im: *anyopaque, window: ?*anyopaque) callconv(.c) void,
     gtk_im_context_filter_keypress: *const fn (im: *anyopaque, event: *Event) callconv(.c) c_int,
@@ -226,7 +230,7 @@ fn layerShellLib() ?*anyopaque {
         layer_shell_lib_tried = true;
         const libs = [_][*:0]const u8{ "libgtk4-layer-shell.so.0", "libgtk4-layer-shell.so.1", "libgtk4-layer-shell.so" };
         layer_shell_lib = for (libs) |name| {
-            if (std.c.dlopen(name, .{ .NOW = true, .GLOBAL = true })) |h| break h;
+            if (std.c.dlopen(name, .{ .LAZY = true, .GLOBAL = true })) |h| break h;
         } else null;
     }
     return layer_shell_lib;
@@ -292,7 +296,7 @@ pub fn load() bool {
     if (!wantsThree() and !force3) {
         // Ahead of GTK 4, when a layer surface is coming: see `layerShellLib`.
         if (wants_layer_shell) _ = layerShellLib();
-        if (std.c.dlopen("libgtk-4.so.1", .{ .NOW = true, .GLOBAL = true })) |lib| {
+        if (std.c.dlopen("libgtk-4.so.1", .{ .LAZY = true, .GLOBAL = true })) |lib| {
             if (table(Api, lib, &api) and table(Api4, lib, &v4api)) {
                 v4 = true;
                 loaded = true;
@@ -300,7 +304,7 @@ pub fn load() bool {
             }
         }
     }
-    const lib = std.c.dlopen("libgtk-3.so.0", .{ .NOW = true, .GLOBAL = true }) orelse return false;
+    const lib = std.c.dlopen("libgtk-3.so.0", .{ .LAZY = true, .GLOBAL = true }) orelse return false;
     if (!table(Api, lib, &api) or !table(Api3, lib, &v3)) return false;
     loaded = true;
     return true;
@@ -336,6 +340,7 @@ pub const pointer_motion_mask = 1 << 2;
 pub const button_press_mask = 1 << 8;
 pub const button_release_mask = 1 << 9;
 pub const key_press_mask = 1 << 10;
+pub const key_release_mask = 1 << 11;
 pub const leave_notify_mask = 1 << 13;
 pub const focus_change_mask = 1 << 14;
 pub const scroll_mask = 1 << 21;

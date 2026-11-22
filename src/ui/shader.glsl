@@ -237,9 +237,10 @@ float clip_coverage() {
     if (v_screen.x < i_clip.x || v_screen.y < i_clip.y || v_screen.x > i_clip.z || v_screen.y > i_clip.w) discard;
     float clip_cover = 1.0;
     float clip_round = i_misc.w;
-    if (clip_round > 0.0) {
-        float corners = floor(clip_round / 4096.0);
-        float rad = clip_round - corners * 4096.0;
+    if (clip_round != 0.0) {
+        float corners = floor(abs(clip_round) / 4096.0);
+        float rad = abs(clip_round) - corners * 4096.0;
+        if (clip_round < 0.0) rad = -rad;
         vec2 ch = (i_clip.zw - i_clip.xy) * 0.5;
         vec2 q = v_screen - i_clip.xy - ch;
         vec2 cd = corner_sdf_aa(q, ch, min(rad, min(ch.x, ch.y)));
@@ -254,6 +255,7 @@ float clip_coverage() {
 #if defined(QUAD_FS)
 uniform sampler2D atlas;
 uniform sampler2D images;
+uniform sampler2D group_layer;
 
 // Shadows as GPUI draws them (after Evan Wallace's "fast rounded rectangle
 // shadows"): the box's coverage blurred by a Gaussian, exact along x with
@@ -340,6 +342,13 @@ vec4 triangle_color() {
 
 vec4 shade() {
     float kind = i_misc.z;
+    if (kind == 10.0 || kind == 11.0) {
+        float fade = 1.0;
+        if (i_border_color.z > 0.0) fade = min(fade, clamp((v_world.y - i_border_color.x) / i_border_color.z, 0.0, 1.0));
+        if (i_border_color.w > 0.0) fade = min(fade, clamp((i_border_color.y - v_world.y) / i_border_color.w, 0.0, 1.0));
+        return texelFetch(group_layer, ivec2(gl_FragCoord.xy), 0) * (i_color.a * fade);
+    }
+    if (kind == 9.0) return vec4(0.0);
     if (kind == 6.0) return line_color();
     if (kind == 7.0) return triangle_color();
     if (kind == 1.0) {

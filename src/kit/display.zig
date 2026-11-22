@@ -36,12 +36,12 @@ pub fn badge(c: *ui.Context, count: u32, opts: struct { dot: bool = false, max: 
     const t = kit.tokens(c);
     const col = opts.color orelse t.danger;
     if (opts.dot or count == 0) {
-        const dot = ui.div(c).absolute().offset(opts.x - 3, opts.y - 3).w(9).h(9).roundedFull().bg(col).border(t.background).borderW(1.5);
+        const dot = ui.div(c).absolute().offset(opts.x - 3, opts.y - 3).w(9).h(9).roundedFull().circular().bg(col).border(t.background).borderW(1.5);
         dot.end();
         return;
     }
     const label = if (count > opts.max) c.print("{d}+", .{opts.max}) else c.print("{d}", .{count});
-    const d = ui.div(c).absolute().offset(opts.x - 8, opts.y - 8).h(17).px(5).roundedFull().bg(col).border(t.background).borderW(1.5).center();
+    const d = ui.div(c).absolute().offset(opts.x - 8, opts.y - 8).h(17).px(5).roundedFull().circular().bg(col).border(t.background).borderW(1.5).center();
     defer d.end();
     ui.text(c, label, .{ .size = 10, .weight = .bold, .color = .white });
 }
@@ -50,7 +50,7 @@ pub fn badge(c: *ui.Context, count: u32, opts: struct { dot: bool = false, max: 
 /// picks, in a circle `size` points across.
 pub fn avatar(c: *ui.Context, opts: struct { name: []const u8 = "", image: ?[]const u8 = null, size: f32 = 32, ring: ?Color = null }) void {
     const t = kit.tokens(c);
-    var d = ui.div(c).w(opts.size).h(opts.size).roundedFull().center().clip();
+    var d = ui.div(c).w(opts.size).h(opts.size).roundedFull().circular().center().clip();
     if (opts.ring) |r| d = d.border(r).borderW(2);
     defer d.end();
     if (opts.image) |png| {
@@ -59,7 +59,7 @@ pub fn avatar(c: *ui.Context, opts: struct { name: []const u8 = "", image: ?[]co
     }
     const hues = [_]u24{ 0xe8453c, 0xe8833c, 0xc9a227, 0x3fae5a, 0x16a3a3, 0x2f6fd0, 0x6d4fd0, 0xb447a8 };
     const pick = std.hash.Wyhash.hash(0, opts.name) % hues.len;
-    c.node(d.index).style.background = if (opts.name.len == 0) t.surface_hover else Color.hex(hues[pick]);
+    c.node(d.index).style.background = if (opts.name.len == 0) t.surface_hover else Color.hex(hues[@intCast(pick)]);
     var buf: [8]u8 = undefined;
     // Into the frame's memory: text is drawn after this returns.
     ui.text(c, c.print("{s}", .{initials(&buf, opts.name)}), .{ .size = opts.size * 0.4, .weight = .semibold, .color = if (opts.name.len == 0) t.muted else .white });
@@ -94,7 +94,7 @@ pub fn avatarGroup(c: *ui.Context, names: []const []const u8, opts: struct { siz
         avatar(c, .{ .name = name, .size = opts.size, .ring = t.background });
     }
     if (names.len > shown) {
-        const more = ui.div(c).offset(-@as(f32, @floatFromInt(shown)) * opts.size * 0.22, 0).w(opts.size).h(opts.size).roundedFull().center().bg(t.surface_hover).border(t.background).borderW(2);
+        const more = ui.div(c).offset(-@as(f32, @floatFromInt(shown)) * opts.size * 0.22, 0).w(opts.size).h(opts.size).roundedFull().circular().center().bg(t.surface_hover).border(t.background).borderW(2);
         defer more.end();
         ui.text(c, c.print("+{d}", .{names.len - shown}), .{ .size = opts.size * 0.36, .weight = .semibold, .color = t.muted });
     }

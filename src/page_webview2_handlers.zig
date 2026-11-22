@@ -2,6 +2,7 @@
 const std = @import("std");
 const wv = @import("windows/webview2.zig");
 const serve = @import("page_webview2_serve.zig");
+const nav = @import("page_webview2_nav.zig");
 const page = @import("page.zig");
 const Page = @import("page_webview2.zig").Page;
 const Window = @import("windows/window.zig").Window;
@@ -73,7 +74,12 @@ pub const ScriptDone = struct {
 pub const EnvCreated = struct {
     pub fn invoke(p: *Page, err: HRESULT, result: ?*Com) callconv(.winapi) HRESULT {
         if (p.queue.window.app.debug) std.debug.print("nanoui: webview2 environment callback 0x{x}\n", .{@as(u32, @bitCast(err))});
-        if (err >= 0) if (result) |env| p.environmentReady(env);
+        if (err >= 0) {
+            if (result) |env| p.environmentReady(env);
+        } else {
+            p.pending_req.close(p.queue.gpa);
+            nav.reportError(p, p.queue.current_url, "WebView2 environment creation failed");
+        }
         // `result` is WebView2's only for the length of this call: the page
         // took its own reference (`environmentReady`), so none is released here.
         return wv.S_OK;
@@ -97,7 +103,20 @@ pub const CtlCreated = struct {
             cancel(err, result);
             return wv.S_OK;
         }
-        if (err >= 0) if (result) |ctl| p.controllerReady(ctl);
+        if (err >= 0) {
+            if (result) |ctl| p.controllerReady(ctl);
+        } else {
+            p.pending_req.close(p.queue.gpa);
+            nav.reportError(p, p.queue.current_url, "WebView2 controller creation failed");
+        }
+        return wv.S_OK;
+    }
+};
+
+pub const NavigationStarting = struct {
+    pub fn invoke(p: *Page, sender: ?*Com, args: ?*Com) callconv(.winapi) HRESULT {
+        _ = sender;
+        nav.onNavigationStarting(Page, p, args);
         return wv.S_OK;
     }
 };
@@ -105,7 +124,6 @@ pub const CtlCreated = struct {
 pub const NavigationCompleted = struct {
     pub fn invoke(p: *Page, sender: ?*Com, args: ?*Com) callconv(.winapi) HRESULT {
         _ = sender;
-        _ = args;
         if (p.queue.window.app.debug) {
             // What the view is showing, and what is in it: a document that
             // is not the app's page shows here as `about:blank` or an error.
@@ -121,6 +139,8 @@ pub const NavigationCompleted = struct {
                 }
             };
         }
+        if (p.queue.dead) return wv.S_OK;
+        nav.onNavigationCompleted(Page, p, args);
         if (p.queue.dead) return wv.S_OK;
         // With a document to run in, the app's `--nanoui-eval` goes now:
         // `dom-ready` (the bridge's) comes before the document is there.
@@ -163,38 +183,128 @@ pub const MessageReceived = struct {
     }
 };
 
+pub fn blockFilteredPage(self: *Page, msg: []const u8) void {
+    self.filter_blocked = true;
+    var pending_url_copy: ?[]u8 = null;
+    defer if (pending_url_copy) |u| self.queue.gpa.free(u);
+    const fail_url = if (self.queue.current_url.len > 0)
+        self.queue.current_url
+    else if (self.pending_req.pending) |req| blk: {
+        pending_url_copy = self.queue.gpa.dupe(u8, req.url) catch null;
+        break :blk pending_url_copy orelse self.queue.options.url;
+    } else self.queue.options.url;
+    self.pending_req.close(self.queue.gpa);
+    const ctl = self.controller;
+    self.controller = null;
+    const view = self.webview;
+    self.webview = null;
+    if (ctl) |c| {
+        _ = wv.Controller.setIsVisible(c, 0);
+        _ = wv.Controller.close(c);
+        c.release();
+    }
+    if (view) |v| v.release();
+    if (self.queue.dead) return;
+    nav.reportError(self, fail_url, msg);
+}
+
+/// Installs all-frame resource filtering and `ResourceRequested`; returns false
+/// (after blocking the page) if `allow_request` is active and setup fails.
+pub fn installResourceFilter(self: *Page, v: *Com) bool {
+    const filtered = self.queue.options.allow_request != null;
+    if (filtered) {
+        const v22 = wv.query(v, &wv.iid_webview2_22) orelse {
+            std.log.warn("nanoui: this WebView2 runtime cannot filter every frame's requests; the page is not loaded", .{});
+            blockFilteredPage(self, "WebView2 runtime cannot filter every frame");
+            return false;
+        };
+        const fh = wv.WebView22.addResourceFilterKinds(v22, wv.utf8LitZ("*"), wv.resource_context_all, wv.request_source_kinds_all);
+        v22.release();
+        if (fh < 0) {
+            std.log.warn("nanoui: AddWebResourceRequestedFilterWithRequestSourceKinds failed (0x{x}); the page is not loaded", .{@as(u32, @bitCast(fh))});
+            blockFilteredPage(self, "WebView2 resource filter setup failed");
+            return false;
+        }
+        if (self.queue.dead) return false;
+    }
+    if (self.makeHandler(ResourceRequested)) |h| {
+        const rr = wv.WebView.addWebResourceRequested(v, h, &self.token_resource);
+        _ = wv.Com.release(h);
+        if (rr < 0) {
+            self.token_resource = 0;
+            if (filtered) {
+                std.log.warn("nanoui: add_WebResourceRequested failed (0x{x}); the page is not loaded", .{@as(u32, @bitCast(rr))});
+                blockFilteredPage(self, "WebView2 resource filter handler registration failed");
+                return false;
+            }
+        }
+    } else |_| {
+        if (filtered) {
+            blockFilteredPage(self, "WebView2 resource filter handler allocation failed");
+            return false;
+        }
+    }
+    return true;
+}
+
 pub const ResourceRequested = struct {
+    fn denyIfFiltered(p: *Page, a: *Com) HRESULT {
+        if (p.queue.dead or p.queue.options.allow_request == null) return wv.S_OK;
+        const env = p.environment orelse return wv.S_OK;
+        var resp: ?*Com = null;
+        const cr = serve.makeForbiddenResponse(env, &resp);
+        if (cr < 0 or resp == null) {
+            if (cr < 0) std.log.warn("nanoui: CreateWebResourceResponse failed (0x{x})", .{@as(u32, @bitCast(cr))});
+            return wv.S_OK;
+        }
+        defer resp.?.release();
+        if (p.queue.dead) return wv.S_OK;
+        const pr = wv.ResourceArgs.setResponse(a, resp.?);
+        if (pr < 0) std.log.warn("nanoui: put_Response failed (0x{x})", .{@as(u32, @bitCast(pr))});
+        return wv.S_OK;
+    }
+
     pub fn invoke(p: *Page, sender: ?*Com, args: ?*Com) callconv(.winapi) HRESULT {
         _ = sender;
         const a = args orelse return wv.S_OK;
         const page_self = p;
 
         var req: ?*Com = null;
-        if (wv.ResourceArgs.request(a, &req) < 0) return wv.S_OK;
-        const r = req orelse return wv.S_OK;
+        if (wv.ResourceArgs.request(a, &req) < 0) return denyIfFiltered(p, a);
+        const r = req orelse return denyIfFiltered(p, a);
         defer r.release();
         if (p.queue.dead) return wv.S_OK;
 
         var uri: wv.PWSTR = null;
-        if (wv.ResourceRequest.uri(r, &uri) < 0) return wv.S_OK;
+        if (wv.ResourceRequest.uri(r, &uri) < 0) return denyIfFiltered(p, a);
         defer wv.coTaskMemFree(uri);
         if (p.queue.dead) return wv.S_OK;
-        const wide = uri orelse return wv.S_OK;
+        const wide = uri orelse return denyIfFiltered(p, a);
 
         const gpa = page_self.queue.gpa;
         var buf: std.ArrayList(u8) = .empty;
         defer buf.deinit(gpa);
         const units = std.mem.span(wide);
-        buf.ensureTotalCapacity(gpa, units.len * 3) catch return wv.S_OK;
-        const n = std.unicode.utf16LeToUtf8(buf.allocatedSlice(), units) catch return wv.S_OK;
+        const cap = std.math.mul(usize, units.len, 3) catch return denyIfFiltered(p, a);
+        buf.ensureTotalCapacity(gpa, cap) catch return denyIfFiltered(p, a);
+        const n = std.unicode.utf16LeToUtf8(buf.allocatedSlice(), units) catch return denyIfFiltered(p, a);
 
-        const served = page_self.queue.serve(page.pathOf(buf.allocatedSlice()[0..n]));
+        const url = buf.allocatedSlice()[0..n];
+        // Not ours (only an `allow_request` page filters every URL): the
+        // app's yes lets it go to the network, its no answers it here.
+        const served: page.Served = if (page.ownUrl(url)) page_self.queue.serve(page.pathOf(url)) else blk: {
+            const allow = page_self.queue.options.allow_request orelse return wv.S_OK;
+            if (allow(page_self.queue.options.allow_request_ctx, url)) return wv.S_OK;
+            if (p.queue.dead) return wv.S_OK;
+            break :blk .{ .data = "", .mime = "text/plain", .status = 403 };
+        };
         if (p.queue.window.app.debug)
-            std.debug.print("nanoui: resource {s} -> {d} {s} ({d} bytes)\n", .{ buf.allocatedSlice()[0..n], served.status, served.mime, served.data.len });
+            std.debug.print("nanoui: resource {s} -> {d} {s} ({d} bytes)\n", .{ url, served.status, served.mime, served.data.len });
         const env = page_self.environment orelse return wv.S_OK;
         var resp: ?*Com = null;
         const cr = serve.makeResponse(env, served, gpa, &resp);
         if (cr < 0 or resp == null) {
+            if (served.status == 403 and p.queue.options.allow_request != null) return denyIfFiltered(p, a);
             if (cr < 0) std.log.warn("nanoui: CreateWebResourceResponse failed (0x{x})", .{@as(u32, @bitCast(cr))});
             return wv.S_OK;
         }
