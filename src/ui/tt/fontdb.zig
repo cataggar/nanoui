@@ -5,10 +5,15 @@
 //! face that has it.
 const std = @import("std");
 const builtin = @import("builtin");
+const backend = @import("../../backend.zig");
 const font = @import("font.zig");
 const registry = @import("../font_registry.zig");
 const fontindex = @import("fontindex.zig");
 const fontmap = @import("fontmap.zig");
+
+pub const InitOptions = struct {
+    scan_system: bool = true,
+};
 
 pub const Face = struct {
     path: []const u8,
@@ -24,7 +29,9 @@ pub const Face = struct {
 
     fn read(f: Face, db: *Db) !fontmap.Bytes {
         if (f.memory) |m| return .{ .data = try db.gpa.dupe(u8, m) };
-        return fontmap.readFile(db.io, db.gpa, f.path);
+        if (comptime builtin.os.tag == .freestanding) return error.FileNotFound;
+        const io = db.io orelse return error.FileNotFound;
+        return fontmap.readFile(io, db.gpa, f.path);
     }
 };
 
@@ -45,24 +52,28 @@ const cjk = [_][]const u8{ "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC
 /// Where characters a font lacks are looked for first.
 const fallbacks = cjk ++ [_][]const u8{ "Noto Sans", "DejaVu Sans", "Segoe UI Symbol", "Noto Sans Symbols", "Noto Sans Symbols2", "Arial Unicode MS", "Symbola" };
 
-extern "c" fn getenv(name: [*:0]const u8) ?[*:0]const u8;
+const can_getenv = builtin.link_libc and builtin.os.tag != .freestanding and builtin.os.tag != .wasi and !backend.is_embed;
 
 fn env(name: [*:0]const u8) ?[]const u8 {
-    if (builtin.os.tag == .windows) return null;
-    const v = getenv(name) orelse return null;
+    if (comptime !can_getenv or builtin.os.tag == .windows) return null;
+    const c_env = struct {
+        extern "c" fn getenv(n: [*:0]const u8) ?[*:0]const u8;
+    };
+    const v = c_env.getenv(name) orelse return null;
     return std.mem.span(v);
 }
-
-extern "kernel32" fn ExpandEnvironmentStringsW(src: [*:0]const u16, dst: [*]u16, size: u32) callconv(.winapi) u32;
 
 /// The current user's own fonts on Windows, `%LOCALAPPDATA%\Microsoft\Windows\Fonts`,
 /// in `buf`; null where there is no such folder to name.
 pub fn userFontDir(buf: []u8) ?[]const u8 {
-    if (builtin.os.tag != .windows) return null;
+    if (comptime builtin.os.tag != .windows or backend.is_embed) return null;
+    const win_env = struct {
+        extern "kernel32" fn ExpandEnvironmentStringsW(src: [*:0]const u16, dst: [*]u16, size: u32) callconv(.winapi) u32;
+    };
     // A code unit is at most three bytes of WTF-8: no more than `buf` takes.
     var wide: [341]u16 = undefined;
     const room: u32 = @intCast(@min(wide.len, buf.len / 3));
-    const n = ExpandEnvironmentStringsW(std.unicode.utf8ToUtf16LeStringLiteral("%LOCALAPPDATA%\\Microsoft\\Windows\\Fonts"), &wide, room);
+    const n = win_env.ExpandEnvironmentStringsW(std.unicode.utf8ToUtf16LeStringLiteral("%LOCALAPPDATA%\\Microsoft\\Windows\\Fonts"), &wide, room);
     // The count includes the terminator; a variable not set stays unexpanded.
     if (n < 2 or n > room or wide[0] == '%') return null;
     const dir = buf[0..std.unicode.wtf16LeToWtf8(buf, wide[0 .. n - 1])];
@@ -71,7 +82,8 @@ pub fn userFontDir(buf: []u8) ?[]const u8 {
 
 pub const Db = struct {
     gpa: std.mem.Allocator,
-    io: std.Io,
+    io: ?std.Io = null,
+    scan_system: bool = true,
     faces: std.ArrayList(Face) = .empty,
     loaded: std.AutoHashMapUnmanaged(u32, *Loaded) = .empty,
     scanned: bool = false,
@@ -96,11 +108,27 @@ pub const Db = struct {
     scan_directories: usize = 0,
 
     pub fn init(gpa: std.mem.Allocator, io: std.Io) Db {
-        return .{ .gpa = gpa, .io = io };
+        return initOptions(gpa, io, .{ .scan_system = true });
+    }
+
+    pub fn initOptions(gpa: std.mem.Allocator, io: ?std.Io, opts: InitOptions) Db {
+        var db: Db = .{ .gpa = gpa, .io = io, .scan_system = opts.scan_system, .scanned = !opts.scan_system };
+        if (!builtin.is_test) db.addBundled();
+        return db;
+    }
+
+    fn freeFaceBytes(db: *Db, bytes: *fontmap.Bytes) void {
+        if (comptime builtin.os.tag != .freestanding) if (db.io) |io| {
+            fontmap.freeBytes(io, db.gpa, bytes);
+            return;
+        };
+        db.gpa.free(@constCast(bytes.data));
+        bytes.* = undefined;
     }
 
     /// Enables the cross-process index below the app's own cache directory.
     pub fn enableCache(db: *Db, cache_dir: []const u8) void {
+        if (comptime builtin.os.tag == .freestanding) return;
         if (db.owned_cache_path != null) return;
         const path = std.fs.path.join(db.gpa, &.{ cache_dir, "font-index-v2.bin" }) catch return;
         db.owned_cache_path = path;
@@ -112,7 +140,7 @@ pub const Db = struct {
         db.faces.deinit(db.gpa);
         var it = db.loaded.valueIterator();
         while (it.next()) |l| {
-            fontmap.freeBytes(db.io, db.gpa, &l.*.bytes);
+            db.freeFaceBytes(&l.*.bytes);
             db.gpa.destroy(l.*);
         }
         db.loaded.deinit(db.gpa);
@@ -146,7 +174,7 @@ pub const Db = struct {
         while (it.next()) |i| {
             db.faces.items[i.*].memory = "";
             if (db.loaded.fetchRemove(i.*)) |kv| {
-                fontmap.freeBytes(db.io, db.gpa, &kv.value.bytes);
+                db.freeFaceBytes(&kv.value.bytes);
                 db.gpa.destroy(kv.value);
             }
         }
@@ -175,8 +203,10 @@ pub const Db = struct {
     pub fn scan(db: *Db) void {
         db.addBundled();
         if (db.scanned) return;
-        db.disk_start = db.faces.items.len;
         db.scanned = true;
+        if (comptime builtin.os.tag == .freestanding) return;
+        if (!db.scan_system or db.io == null) return;
+        db.disk_start = db.faces.items.len;
         if (db.loadCached()) return;
         db.scanFonts();
         db.saveCached();
@@ -187,8 +217,10 @@ pub const Db = struct {
     }
 
     fn loadCached(db: *Db) bool {
+        if (comptime builtin.os.tag == .freestanding) return false;
+        const io = db.io orelse return false;
         const path = db.cache_path orelse return false;
-        const entries = fontindex.read(db.gpa, db.io, path, db.cacheScope()) catch |err| {
+        const entries = fontindex.read(db.gpa, io, path, db.cacheScope()) catch |err| {
             db.cache.state = switch (err) {
                 error.NotFound => .miss,
                 error.Stale => .stale,
@@ -216,13 +248,15 @@ pub const Db = struct {
     }
 
     fn saveCached(db: *Db) void {
+        if (comptime builtin.os.tag == .freestanding) return;
+        const io = db.io orelse return;
         const path = db.cache_path orelse return;
         if (db.cache_broken) {
             db.cache.state = .write_failed;
             return;
         }
         const faces = db.faces.items[db.disk_start..];
-        const written = fontindex.write(db.gpa, db.io, path, db.cacheScope(), db.cache_dirs.items, faces) orelse {
+        const written = fontindex.write(db.gpa, io, path, db.cacheScope(), db.cache_dirs.items, faces) orelse {
             db.cache.state = .write_failed;
             return;
         };
@@ -233,6 +267,8 @@ pub const Db = struct {
     }
 
     fn scanFonts(db: *Db) void {
+        if (comptime builtin.os.tag == .freestanding) return;
+        if (db.io == null) return;
         if (db.fonts_dir) |dir| {
             db.scanDir(dir);
             return;
@@ -261,17 +297,20 @@ pub const Db = struct {
                 }
             },
         }
+        if (builtin.is_test and db.faces.items.len == db.disk_start) db.scanDir("src/ui/web_fonts");
     }
 
     /// Records a directory without enumerating it. A missing optional folder
     /// is part of the key too; other stat failures suppress only the write.
     fn recordDir(db: *Db, path: []const u8) void {
+        if (comptime builtin.os.tag == .freestanding) return;
+        const io = db.io orelse return;
         if (db.cache_path == null) return;
         var record: fontindex.Directory = .{ .path = db.gpa.dupe(u8, path) catch {
             db.cache_broken = true;
             return;
         } };
-        const stat = std.Io.Dir.cwd().statFile(db.io, path, .{}) catch |err| {
+        const stat = std.Io.Dir.cwd().statFile(io, path, .{}) catch |err| {
             if (err == error.FileNotFound) {
                 record.present = false;
             } else {
@@ -299,13 +338,15 @@ pub const Db = struct {
     }
 
     pub fn scanDir(db: *Db, path: []const u8) void {
+        if (comptime builtin.os.tag == .freestanding) return;
+        const io = db.io orelse return;
         db.recordDir(path);
-        var dir = std.Io.Dir.cwd().openDir(db.io, path, .{ .iterate = true }) catch |err| {
+        var dir = std.Io.Dir.cwd().openDir(io, path, .{ .iterate = true }) catch |err| {
             // A folder that isn't there is recorded as absent: the index holds.
             if (err != error.FileNotFound) db.cache_broken = true;
             return;
         };
-        defer dir.close(db.io);
+        defer dir.close(io);
         db.scan_directories += 1;
         var walker = dir.walk(db.gpa) catch {
             db.cache_broken = true;
@@ -313,7 +354,7 @@ pub const Db = struct {
         };
         defer walker.deinit();
         while (true) {
-            const next = walker.next(db.io) catch {
+            const next = walker.next(io) catch {
                 db.cache_broken = true;
                 break;
             };
@@ -335,13 +376,15 @@ pub const Db = struct {
 
     /// Reads a file's faces' styles, touching only the tables they need.
     pub fn addFile(db: *Db, path: []const u8) void {
+        if (comptime builtin.os.tag == .freestanding) return;
+        const io = db.io orelse return;
         db.scan_files += 1;
-        var file = std.Io.Dir.cwd().openFile(db.io, path, .{}) catch {
+        var file = std.Io.Dir.cwd().openFile(io, path, .{}) catch {
             db.cache_broken = true;
             return;
         };
-        defer file.close(db.io);
-        const stat = file.stat(db.io) catch {
+        defer file.close(io);
+        const stat = file.stat(io) catch {
             db.cache_broken = true;
             return;
         };
@@ -351,15 +394,16 @@ pub const Db = struct {
         // initial window (sufficient for single-face SFNT directories and most
         // early metadata tables) and expand to 64 KB only for TTC collections
         // or unusually large table directories.
-        const data = std.heap.page_allocator.alloc(u8, @intCast(len)) catch return;
-        defer std.heap.page_allocator.free(data);
+        const page_gpa = backend.page_or_wasm_allocator;
+        const data = page_gpa.alloc(u8, @intCast(len)) catch return;
+        defer page_gpa.free(data);
         var header_len: usize = @min(len, 4096);
-        _ = file.readPositionalAll(db.io, data[0..header_len], 0) catch return;
+        _ = file.readPositionalAll(io, data[0..header_len], 0) catch return;
         const is_ttc = header_len >= 4 and std.mem.eql(u8, data[0..4], "ttcf");
         const sfnt_tables = if (!is_ttc and header_len >= 6) std.mem.readInt(u16, data[4..6], .big) else 0;
         if ((is_ttc or 12 + @as(usize, sfnt_tables) * 16 > header_len) and len > header_len) {
             const wide = @min(len, 64 * 1024);
-            _ = file.readPositionalAll(db.io, data[header_len..wide], header_len) catch return;
+            _ = file.readPositionalAll(io, data[header_len..wide], header_len) catch return;
             header_len = wide;
         }
         for (0..font.faces(data)) |i| {
@@ -369,7 +413,7 @@ pub const Db = struct {
                 const want: usize = if (std.mem.eql(u8, name, "name")) t.name_len else 100;
                 const end = @min(len, off + want);
                 if (off != 0 and off < len and end > header_len) {
-                    _ = file.readPositionalAll(db.io, data[off..end], off) catch {};
+                    _ = file.readPositionalAll(io, data[off..end], off) catch {};
                 }
             }
             const style = font.Style.read(data, t);
@@ -455,22 +499,25 @@ pub const Db = struct {
     /// stable unsupported face (for example, no usable cmap) stays cached;
     /// otherwise every startup would rescan and rewrite the whole index.
     fn discardFailedFace(db: *Db, face: u32) void {
+        if (comptime builtin.os.tag == .freestanding) return;
         if (face < db.disk_start or db.faces.items[face].memory != null) return;
+        const io = db.io orelse return;
         const path = db.cache_path orelse return;
         const f = db.faces.items[face];
         const changed = changed: {
-            const stat = std.Io.Dir.cwd().statFile(db.io, f.path, .{}) catch break :changed true;
+            const stat = std.Io.Dir.cwd().statFile(io, f.path, .{}) catch break :changed true;
             break :changed stat.kind != .file or stat.size != f.size or stat.mtime.nanoseconds != f.mtime;
         };
         if (!changed) return;
-        std.Io.Dir.cwd().deleteFile(db.io, path) catch |err| {
-            if (err != error.FileNotFound) std.Io.Dir.cwd().writeFile(db.io, .{ .sub_path = path, .data = "invalid" }) catch {};
+        std.Io.Dir.cwd().deleteFile(io, path) catch |err| {
+            if (err != error.FileNotFound) std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = "invalid" }) catch {};
         };
         if (db.cache.state != .off) db.cache.state = .stale;
     }
 
     /// A face's font, loaded on first use (null if it cannot be read).
     pub fn load(db: *Db, face: u32) ?*const font.Font {
+        if (face >= db.faces.items.len) return null;
         if (db.loaded.get(face)) |l| return &l.font;
         const f = db.faces.items[face];
         var bytes = f.read(db) catch {
@@ -478,18 +525,18 @@ pub const Db = struct {
             return null;
         };
         const parsed = font.Font.init(bytes.data, f.index) catch {
-            fontmap.freeBytes(db.io, db.gpa, &bytes);
+            db.freeFaceBytes(&bytes);
             db.discardFailedFace(face);
             return null;
         };
         const l = db.gpa.create(Loaded) catch {
-            fontmap.freeBytes(db.io, db.gpa, &bytes);
+            db.freeFaceBytes(&bytes);
             return null;
         };
         l.* = .{ .bytes = bytes, .font = parsed };
         l.font.data = l.bytes.data;
         db.loaded.put(db.gpa, face, l) catch {
-            fontmap.freeBytes(db.io, db.gpa, &l.bytes);
+            db.freeFaceBytes(&l.bytes);
             db.gpa.destroy(l);
             return null;
         };
@@ -523,7 +570,7 @@ pub const Db = struct {
                 db.discardFailedFace(@intCast(i));
                 continue;
             };
-            defer fontmap.freeBytes(db.io, db.gpa, &bytes);
+            defer db.freeFaceBytes(&bytes);
             const f = font.Font.init(bytes.data, face.index) catch {
                 db.discardFailedFace(@intCast(i));
                 continue;

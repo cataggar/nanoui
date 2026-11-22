@@ -3,21 +3,25 @@
 //! (`metalDevice`), and cursors drawn from its own pixels (`makeCursor`).
 const std = @import("std");
 const builtin = @import("builtin");
+const backend = @import("../backend.zig");
 const gpu = @import("gpu.zig");
 const ctx_mod = @import("context.zig");
 const Context = ctx_mod.Context;
 
 const apple = builtin.os.tag == .macos or builtin.os.tag == .ios;
+const has_webgpu = builtin.os.tag == .wasi and (backend.current == .auto or backend.current == .webgpu);
+const has_metal = apple and (backend.current == .auto or backend.current == .metal);
+const has_d3d11 = builtin.os.tag == .windows and (backend.current == .auto or backend.current == .d3d11);
 
 /// Handle for the host's shared GPUDevice, resolved by JavaScript's object table.
 pub fn webgpuDevice() u32 {
-    if (comptime builtin.os.tag != .wasi) return 0;
+    if (comptime !has_webgpu) return 0;
     return @import("webgpu_device.zig").get() orelse 0;
 }
 
 /// Changes whenever the host replaces the shared GPUDevice.
 pub fn webgpuDeviceGeneration() u64 {
-    if (comptime builtin.os.tag != .wasi) return 0;
+    if (comptime !has_webgpu) return 0;
     return @import("webgpu_device.zig").generation();
 }
 
@@ -37,7 +41,7 @@ pub fn lut(c: *Context, key: []const u8, size: u16, rgba16f_data: []const f16) g
 
 /// The Metal device nanoui draws with; null where there's no Metal.
 pub fn metalDevice() ?*anyopaque {
-    if (comptime !apple) return null;
+    if (comptime !has_metal) return null;
     return @import("metal_app.zig").metalDevice();
 }
 
@@ -49,14 +53,14 @@ pub fn metalDevice() ?*anyopaque {
 /// thread; if the GPU is reset another is made and `d3d11DeviceGeneration`
 /// moves on: bind the decoder again then.
 pub fn d3d11Device() ?*anyopaque {
-    if (comptime builtin.os.tag != .windows) return null;
+    if (comptime !has_d3d11) return null;
     const pair = @import("d3d11_device.zig").shared() orelse return null;
     return @ptrCast(pair.device);
 }
 
 /// Moves on each time `d3d11Device` is a new device (0 before the first).
 pub fn d3d11DeviceGeneration() u64 {
-    if (comptime builtin.os.tag != .windows) return 0;
+    if (comptime !has_d3d11) return 0;
     return @import("d3d11_device.zig").generation();
 }
 
@@ -67,6 +71,7 @@ pub fn d3d11DeviceGeneration() u64 {
 /// free it with `freeCursor` once nothing shows it. Null where custom
 /// cursors aren't drawn (the arrow stays).
 pub fn makeCursor(rgba: []const u8, w: u32, h: u32, hot_x: f32, hot_y: f32) ?*anyopaque {
+    if (comptime backend.is_embed) return null;
     if (comptime builtin.os.tag == .windows) return @import("../windows/cursor.zig").make(rgba, w, h, hot_x, hot_y);
     if (comptime builtin.os.tag != .macos) return null;
     if (w == 0 or h == 0 or rgba.len < @as(usize, w) * h * 4) return null;
@@ -100,6 +105,7 @@ pub fn setCursor(c: *Context, cursor: ?*anyopaque) void {
 
 /// Frees a cursor `makeCursor` made.
 pub fn freeCursor(cursor: ?*anyopaque) void {
+    if (comptime backend.is_embed) return;
     if (comptime builtin.os.tag == .windows) {
         if (cursor) |cur| @import("../windows/cursor.zig").free(cur);
         return;
@@ -114,6 +120,10 @@ test "makeCursor makes a cursor from pixels" {
     for (0..16 * 16) |k| px[k * 4 ..][0..4].* = .{ 255, 255, 255, if (k % 3 == 0) 255 else 0 };
     const cur = makeCursor(&px, 16, 16, 8, 8);
     defer freeCursor(cur);
+    if (comptime backend.is_embed) {
+        try std.testing.expect(cur == null);
+        return;
+    }
     if (comptime builtin.os.tag == .windows) {
         // An HCURSOR, not an icon, with the hot spot it was given.
         try std.testing.expect(cur != null);

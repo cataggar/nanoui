@@ -13,7 +13,8 @@ const png_decode = @import("png_decode.zig");
 const jpeg_decode = @import("jpeg_decode.zig");
 const gif_decode = @import("gif_decode.zig");
 
-const portable = build_options.portable or !(builtin.os.tag == .macos or builtin.os.tag == .ios);
+const opt_portable = if (@hasDecl(build_options, "portable")) build_options.portable else false;
+const portable = opt_portable or @import("../backend.zig").is_embed or !(builtin.os.tag == .macos or builtin.os.tag == .ios);
 const imageio = if (portable) void else @import("image.zig");
 
 /// The atlas's side when nothing asks for more.
@@ -115,6 +116,8 @@ pub const Images = struct {
     kept_bytes: usize = 0,
     /// Rows of `pixels` changed since the GPU's copy was made.
     dirty: ?[2]u32 = null,
+    /// Bounding `{ x, y, width, height }` of `pixels` modified since `takeDirtyRect`.
+    dirty_rect: ?[4]u32 = null,
     sink: ?Sink = null,
     /// BGRA, `side` × `side`; empty until a picture comes.
     pixels: []u8 = &.{},
@@ -223,6 +226,28 @@ pub const Images = struct {
     pub fn invalidateAtlas(im: *Images) void {
         im.empty();
         im.generation +%= 1;
+    }
+
+    pub fn peekDirtyRect(im: *const Images) ?[4]u32 {
+        return im.dirty_rect;
+    }
+
+    pub fn takeDirtyRect(im: *Images) ?[4]u32 {
+        defer im.dirty_rect = null;
+        return im.dirty_rect;
+    }
+
+    fn markDirty(im: *Images, x: u32, y: u32, w: u32, h: u32) void {
+        if (w == 0 or h == 0) return;
+        if (im.dirty_rect) |r| {
+            const x0 = @min(r[0], x);
+            const y0 = @min(r[1], y);
+            const x1 = @max(r[0] + r[2], x + w);
+            const y1 = @max(r[1] + r[3], y + h);
+            im.dirty_rect = .{ x0, y0, x1 - x0, y1 - y0 };
+        } else {
+            im.dirty_rect = .{ x, y, w, h };
+        }
     }
 
     pub fn key(name: []const u8) u64 {
@@ -336,6 +361,7 @@ pub const Images = struct {
         if (im.pixels.len == 0 and im.sink == null) {
             im.pixels = try im.gpa.alloc(u8, @as(usize, im.side) * im.side * 4);
             @memset(im.pixels, 0);
+            if (im.resets > 0) im.dirty_rect = .{ 0, 0, im.side, im.side };
         }
         // Larger than the atlas may grow to: it can't be drawn.
         if (d.w > im.side or d.h > im.side) return error.TooLarge;
@@ -360,6 +386,7 @@ pub const Images = struct {
         im.shelf_h = @max(im.shelf_h, d.h);
         im.generation +%= 1;
         im.dirty = if (im.dirty) |r| .{ @min(r[0], y), @max(r[1], y + d.h) } else .{ y, y + d.h };
+        im.markDirty(x, y, d.w, d.h);
         const s: f32 = @floatFromInt(im.side);
         return .{
             .uv = .{ @as(f32, @floatFromInt(x)) / s, @as(f32, @floatFromInt(y)) / s, @as(f32, @floatFromInt(x + d.w)) / s, @as(f32, @floatFromInt(y + d.h)) / s },
@@ -380,6 +407,7 @@ pub const Images = struct {
         im.shelf_y = 0;
         im.shelf_h = 0;
         im.resets +%= 1;
+        im.dirty_rect = if (im.pixels.len > 0) .{ 0, 0, im.side, im.side } else null;
     }
 };
 
@@ -527,9 +555,15 @@ test "pictures pack, scale down and come back by key" {
     const e = im.get(Images.key("a.png"), .{ .encoded = bytes }, max_side).?;
     try std.testing.expectEqual(@as(u32, 2), e.width);
     try std.testing.expectEqualSlices(u8, &px, im.pixels[0..8]);
+    try std.testing.expectEqual(@as(?[4]u32, .{ 0, 0, 2, 1 }), im.peekDirtyRect());
+    try std.testing.expectEqual(@as(?[4]u32, .{ 0, 0, 2, 1 }), im.takeDirtyRect());
+    try std.testing.expectEqual(@as(?[4]u32, null), im.peekDirtyRect());
     const gen = im.generation;
     _ = im.get(Images.key("a.png"), .{ .encoded = bytes }, max_side);
     try std.testing.expectEqual(gen, im.generation);
+    try std.testing.expectEqual(@as(?[4]u32, null), im.takeDirtyRect());
+    im.invalidateAtlas();
+    try std.testing.expectEqual(@as(?[4]u32, .{ 0, 0, size, size }), im.takeDirtyRect());
     try std.testing.expect(im.get(Images.key("bad"), .{ .encoded = "not an image" }, max_side) == null);
     // Too big: averaged down to the longest side.
     const big = try gpa.alloc(u8, 2048 * 2 * 4);

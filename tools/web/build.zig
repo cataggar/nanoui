@@ -97,6 +97,7 @@ fn portableOptions(b: *std.Build, version: []const u8) *std.Build.Step.Options {
     options.addOption(bool, "portable", true);
     options.addOption(bool, "in_rt", false);
     options.addOption([]const u8, "version", version);
+    options.addOption([]const u8, "backend", "auto");
     return options;
 }
 

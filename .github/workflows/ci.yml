@@ -59,7 +59,7 @@ jobs:
           echo "ZIG_GLOBAL_CACHE_DIR=.zig-cache/wazig-global" >> "$GITHUB_ENV"
       - name: Build web targets and check line limit with wazig (-fno-llvm +simd128)
         run: |
-          python3 tools/wazig/build.py lines web-check web-parity web-demo web-bench --summary
+          python3 tools/wazig/build.py lines test-embed web-check web-parity web-demo web-bench --summary
           node tools/web/check.mjs
       - name: Run portable wasm32-wasi unit and widget tests under Wasmtime
         run: python3 tools/wazig/build.py test --summary
@@ -109,6 +109,8 @@ jobs:
       - run: sh tools/test-hooks.sh
       - run: zig build test
       - run: zig build test -Dportable=true
+      - run: zig build test-embed
+      - run: zig build run-embedded
       - run: zig build -Dtarget=x86_64-windows-gnu --prefix zig-out/windows
       # Windows on Arm too: COM's function pointers are aligned there.
       - run: zig build -Dtarget=aarch64-windows-gnu --prefix zig-out/windows-arm64
@@ -132,6 +134,8 @@ jobs:
         with:
           version: 0.17.0
       - run: sh tools/test-hooks.sh
+      - run: zig build test-embed
+      - run: zig build run-embedded
       - name: GTK, WebKitGTK, Mesa's OpenGL and OpenGL ES (llvmpipe), fonts and a virtual display
         run: |
           sudo apt-get update
@@ -206,6 +210,8 @@ jobs:
       # Run directly, each test named (Direct3D's says whether it ran or skipped).
       - run: zig build test-bin --prefix zig-out/windows
       - run: zig-out/windows/bin/nanoui-tests.exe
+      - run: zig build test-embed
+      - run: zig build run-embedded
       - run: zig build test-nui
       - name: nui makes an app that builds, passes its test and renders
         run: |

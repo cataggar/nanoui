@@ -10,11 +10,13 @@
 //!     try t.clickText("Increment");
 //!     try std.testing.expect(t.hasText("1"));
 const std = @import("std");
+const builtin = @import("builtin");
+const backend = @import("../backend.zig");
 const types = @import("types.zig");
 const gpu = @import("gpu.zig");
 const text = @import("text.zig");
 const raster = @import("raster.zig");
-const portable = text.portable;
+const portable = text.portable or backend.is_embed;
 const metal = if (portable) struct {
     pub const Renderer = void;
     pub const LinearPixels = struct {
@@ -99,7 +101,7 @@ pub const Tester = struct {
         t.* = .{
             .gpa = gpa,
             .renderer = renderer,
-            .text = if (portable) .init(gpa) else .init(gpa, renderer.device),
+            .text = if (portable) .initOptions(gpa, .{ .scan_system_fonts = @import("builtin").os.tag != .freestanding }) else .init(gpa, renderer.device),
             .ctx = undefined,
             .view = view,
             .size = .{ .w = opts.width, .h = opts.height },
@@ -422,6 +424,7 @@ pub const Tester = struct {
 
     /// Renders the last frame offscreen and writes it to a PNG file.
     pub fn screenshot(t: *Tester, path: []const u8) !void {
+        if (comptime builtin.os.tag == .freestanding) return error.Unsupported;
         const pixels = try t.render(t.gpa);
         defer pixels.deinit(t.gpa);
         if (portable) {

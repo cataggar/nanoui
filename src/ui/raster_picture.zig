@@ -4,14 +4,52 @@
 //! (`texture_cpu.zig`): a pixel buffer's planes converted as the colour
 //! stage converts them on the GPU.
 const std = @import("std");
+const builtin = @import("builtin");
+const backend = @import("../backend.zig");
 const gpu = @import("gpu.zig");
 const raster = @import("raster.zig");
-const texture_cpu = @import("texture_cpu.zig");
+const can_resolve_gpu = switch (builtin.os.tag) {
+    .macos, .ios => backend.current == .auto or backend.current == .metal,
+    .windows => backend.current == .auto or backend.current == .d3d11,
+    else => true,
+};
+const texture_cpu = if (can_resolve_gpu) @import("texture_cpu.zig") else void;
 
 /// A texture the app gave the frame, drawn as `picture` draws the atlas.
 pub fn texture(out: gpu.Pixels, i: *const gpu.Instance, t: gpu.Texture, scale: f32, b: [4]usize) void {
-    var held = texture_cpu.resolve(std.heap.page_allocator, t) orelse return;
-    defer held.deinit(std.heap.page_allocator);
+    const page_gpa = backend.page_or_wasm_allocator;
+    if (comptime !can_resolve_gpu) {
+        if (t.bgra.len == 0 or t.width == 0 or t.height == 0) return;
+        const stride = if (t.stride > 0) t.stride else @as(usize, t.width) * 4;
+        if (t.bgra.len < stride * t.height) return;
+        if (!t.needsPost()) {
+            const src: Source = .{ .pixels = t.bgra, .w = t.width, .h = t.height, .stride = stride };
+            picture(out, i, &src, scale, b);
+            return;
+        }
+        const color = @import("color.zig");
+        const u = color.uniforms(t, color.stage(t, 0, false).mode);
+        const conv = page_gpa.alloc(u8, @as(usize, t.width) * t.height * 4) catch return;
+        defer page_gpa.free(conv);
+        for (0..t.height) |y| for (0..t.width) |x| {
+            const row = t.bgra[y * stride + x * 4 ..][0..4];
+            var c: [4]f32 = .{ @as(f32, @floatFromInt(row[2])) / 255, @as(f32, @floatFromInt(row[1])) / 255, @as(f32, @floatFromInt(row[0])) / 255, @as(f32, @floatFromInt(row[3])) / 255 };
+            if (u.source_mode == 3) {
+                const rgb = color.linearToDisplay(.{ c[0], c[1], c[2] }, u);
+                c = .{ rgb[0], rgb[1], rgb[2], 1 };
+            } else if (u.source_mode == 4) {
+                const rgb = color.surfaceLinearToSdr(.{ c[0], c[1], c[2] });
+                c = .{ rgb[0], rgb[1], rgb[2], c[3] };
+            }
+            const graded = color.applyLuts(t, .{ c[0], c[1], c[2] });
+            conv[(y * t.width + x) * 4 ..][0..4].* = .{ color.unorm8(graded[2]), color.unorm8(graded[1]), color.unorm8(graded[0]), color.unorm8(c[3]) };
+        };
+        const src: Source = .{ .pixels = conv, .w = t.width, .h = t.height, .stride = @as(usize, t.width) * 4 };
+        picture(out, i, &src, scale, b);
+        return;
+    }
+    var held = texture_cpu.resolve(page_gpa, t) orelse return;
+    defer held.deinit(page_gpa);
     const src = Source.bgra(held.bgra);
     picture(out, i, &src, scale, b);
 }
@@ -27,7 +65,7 @@ pub const Source = struct {
         return .{ .pixels = p.pixels, .w = p.size, .h = p.size, .stride = @as(usize, p.size) * 4 };
     }
 
-    fn bgra(b: texture_cpu.Bgra) Source {
+    fn bgra(b: anytype) Source {
         return .{ .pixels = b.pixels, .w = b.width, .h = b.height, .stride = b.stride };
     }
 };

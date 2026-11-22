@@ -29,7 +29,7 @@ pub const TextBuffer = struct {
     last_id: u64 = 0,
     /// Asked to take the keyboard (`focus`): its field does, next frame.
     want_focus: bool = false,
-    const gpa = std.heap.c_allocator;
+    const gpa = @import("../backend.zig").default_allocator;
 
     pub fn deinit(b: *TextBuffer) void {
         b.buf.deinit(gpa);

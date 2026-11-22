@@ -157,6 +157,7 @@ pub const Clipboard = struct {
     write: *const fn (ctx: ?*anyopaque, text: []const u8) void = systemWrite,
 
     fn systemWrite(_: ?*anyopaque, s: []const u8) void {
+        if (comptime !@import("../backend.zig").has_platform) return;
         @import("../platform.zig").clipboardWrite(s);
     }
 };

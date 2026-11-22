@@ -96,8 +96,8 @@ pub fn rangesCoverPrintableAscii(ranges: []const [2]u21) bool {
 pub const RegisterError = sfnt.Error;
 
 /// The faces brought so far. Touched on the main thread only.
+const list_gpa = @import("../backend.zig").default_allocator;
 var faces: std.ArrayList(*Face) = .empty;
-var faces_gpa: ?std.mem.Allocator = null;
 var serial: u64 = 0;
 /// Bumped when faces come or go: text systems drop what they shaped.
 pub var generation: u64 = 0;
@@ -113,6 +113,10 @@ pub fn unscopedGeneration() u64 {
 /// Adds a face (`FaceOptions`). The bytes need not outlive the call. `gpa` is
 /// used until the family is unregistered.
 pub fn registerFace(gpa: std.mem.Allocator, o: FaceOptions) RegisterError!void {
+    _ = try registerFaceOwned(gpa, o);
+}
+
+pub fn registerFaceOwned(gpa: std.mem.Allocator, o: FaceOptions) RegisterError!*Face {
     if (o.family.len == 0) return error.NotAFont;
     const is_unscoped = std.mem.indexOfScalar(u8, o.family, '@') == null;
     if (is_unscoped) only_scoped_at = false;
@@ -145,14 +149,13 @@ pub fn registerFace(gpa: std.mem.Allocator, o: FaceOptions) RegisterError!void {
         .native = native,
         .complex_ascii = bytes.len > 0 and sfnt.hasUnshieldedMultiLigature(bytes),
     };
-    const list_gpa = faces_gpa orelse gpa;
-    faces_gpa = list_gpa;
     faces.append(list_gpa, f) catch |e| {
         release(f);
         return e;
     };
     generation += 1;
     if (is_unscoped) unscoped_generation += 1;
+    return f;
 }
 
 /// Gives a pending face of `family`, the one registered with `order`, its file or
@@ -204,10 +207,24 @@ pub fn unregisterFamilies(prefix: []const u8) void {
     faces.items.len = kept;
     if (gone) generation += 1;
     if (gone_unscoped) unscoped_generation += 1;
-    if (kept == 0) if (faces_gpa) |g| {
-        faces.deinit(g);
+    if (kept == 0) {
+        faces.deinit(list_gpa);
         faces = .empty;
-        faces_gpa = null;
+    }
+}
+
+pub fn unregisterFace(target: *Face) void {
+    for (faces.items, 0..) |f, i| if (f == target) {
+        const is_unscoped = std.mem.indexOfScalar(u8, f.family, '@') == null;
+        _ = faces.orderedRemove(i);
+        release(f);
+        generation += 1;
+        if (is_unscoped) unscoped_generation += 1;
+        if (faces.items.len == 0) {
+            faces.deinit(list_gpa);
+            faces = .empty;
+        }
+        return;
     };
 }
 

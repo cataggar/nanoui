@@ -27,11 +27,14 @@ pub const springFrom = motion_legacy.springFrom;
 pub const tween = motion_legacy.tween;
 pub const jump = motion_legacy.jump;
 pub const Interaction = ctx_mod.Interaction;
+pub const Waker = ctx_mod.Waker;
 pub const FrameStats = ctx_mod.FrameStats;
 pub const frame_log = @import("frame_log.zig");
 pub const FrameLog = frame_log.FrameLog;
-pub const Surface = if (@import("builtin").os.tag == .macos) @import("surface.zig").Surface else void;
-pub const KeysReleased = if (@import("builtin").os.tag == .macos) @import("surface.zig").KeysReleased else void;
+pub const contract = @import("contract.zig");
+pub const embed = @import("embed.zig");
+pub const Surface = if (!@import("../backend.zig").is_embed and @import("builtin").os.tag == .macos) @import("surface.zig").Surface else void;
+pub const KeysReleased = if (!@import("../backend.zig").is_embed and @import("builtin").os.tag == .macos) @import("surface.zig").KeysReleased else void;
 pub const Shortcut = ctx_mod.Shortcut;
 /// A text field's editing keys: the system's, Emacs's or Vim's.
 pub const Keymap = @import("keymap.zig").Keymap;
@@ -317,6 +320,11 @@ pub const View = struct {
 };
 
 test {
+    const backend = @import("../backend.zig");
+    const os = @import("builtin").os.tag;
+    _ = contract;
+    _ = embed;
+    _ = @import("tests_embed.zig");
     _ = @import("tests_shader_sync.zig");
     _ = @import("tests_ruler.zig");
     // The one press in flight: a second button ignored, a stale press replaced.
@@ -336,7 +344,7 @@ test {
     _ = frame_log;
     _ = @import("present_slots.zig");
     // The disk format and temporary-directory cache tests need no D3D device.
-    _ = @import("d3d11_shader_cache.zig");
+    if (!backend.is_embed) _ = @import("d3d11_shader_cache.zig");
     _ = @import("tests_effects.zig");
     _ = @import("tests_scroll_x.zig");
     _ = @import("tests_a11y_adjust.zig");
@@ -378,8 +386,10 @@ test {
     _ = @import("tests_texture_color.zig");
     _ = @import("tests_lut.zig");
     _ = @import("tests_texture_encoding.zig");
-    _ = @import("tests_hdr_surface.zig");
-    _ = @import("tests_gpu_hook.zig");
+    if (!backend.is_embed) {
+        _ = @import("tests_hdr_surface.zig");
+        _ = @import("tests_gpu_hook.zig");
+    }
     _ = @import("color.zig");
     _ = @import("ui_gpu.zig");
     _ = @import("tests_hole.zig");
@@ -411,7 +421,7 @@ test {
     _ = @import("tests_overlay_bar.zig");
     _ = @import("tests_border.zig");
     _ = @import("tests_scrollbar.zig");
-    if (@import("builtin").os.tag == .linux) _ = @import("tests_opengl.zig");
+    if (os == .linux and (!backend.is_embed or backend.current == .opengl or backend.current == .gles)) _ = @import("tests_opengl.zig");
     _ = @import("tt/raster.zig");
     _ = @import("tt/tests.zig");
     _ = @import("tt/tests_decode.zig");
@@ -429,17 +439,19 @@ test {
     _ = @import("svg.zig");
     _ = @import("tests_svg.zig");
     _ = @import("tests_truncate.zig");
-    if (@import("dwrite.zig").enabled) _ = @import("tests_dwrite.zig");
-    if (@import("builtin").os.tag == .windows) _ = @import("tests_d3d11.zig");
-    if (@import("builtin").os.tag == .windows) _ = @import("tests_d3d11_texture.zig");
-    // An app's D3D11 textures: the shared device, the colour stage, the slots.
-    if (@import("builtin").os.tag == .windows) _ = @import("tests_d3d11_video.zig");
-    if (@import("builtin").os.tag == .windows) _ = @import("d3d11_device.zig");
-    if (@import("builtin").os.tag == .windows) _ = @import("d3d11_video.zig");
-    if (@import("builtin").os.tag == .windows) _ = @import("d3d11_texture.zig");
-    // An extended (scRGB) frame: the compose and the plane (Windows only).
-    if (@import("builtin").os.tag == .windows) _ = @import("tests_d3d11_hdr.zig");
-    if (@import("builtin").os.tag == .windows) _ = @import("d3d11_hdr.zig");
+    if (!backend.is_embed and @import("dwrite.zig").enabled) _ = @import("tests_dwrite.zig");
+    if (os == .windows and (!backend.is_embed or backend.current == .d3d11)) {
+        _ = @import("tests_d3d11.zig");
+        _ = @import("tests_d3d11_texture.zig");
+        // An app's D3D11 textures: the shared device, the colour stage, the slots.
+        _ = @import("tests_d3d11_video.zig");
+        _ = @import("d3d11_device.zig");
+        _ = @import("d3d11_video.zig");
+        _ = @import("d3d11_texture.zig");
+        // An extended (scRGB) frame: the compose and the plane (Windows only).
+        _ = @import("tests_d3d11_hdr.zig");
+        _ = @import("d3d11_hdr.zig");
+    }
     _ = @import("icons.zig");
     _ = @import("frame_pace.zig");
     _ = keys;
@@ -452,7 +464,7 @@ test {
     _ = @import("tests_backtab.zig");
     _ = @import("retain.zig");
     _ = @import("tests_after_frame.zig");
-    if (@import("builtin").os.tag == .macos) {
+    if (!backend.is_embed and os == .macos) {
         _ = @import("tests_menu.zig");
         _ = @import("tests_a11y.zig");
     }

@@ -87,10 +87,14 @@ fn one(t: *Tester, op: []const u8, arg: []const u8) !bool {
         t.advance(try std.fmt.parseFloat(f32, arg));
     } else if (eq(op, "live")) {
         const seconds = try std.fmt.parseFloat(f64, arg);
-        var waited: f64 = 0;
-        while (waited < seconds) : (waited += 0.05) {
-            runFor(0.05);
-            t.frame();
+        if (comptime !@import("../backend.zig").has_platform) {
+            t.advance(@floatCast(seconds));
+        } else {
+            var waited: f64 = 0;
+            while (waited < seconds) : (waited += 0.05) {
+                runFor(0.05);
+                t.frame();
+            }
         }
     } else if (eq(op, "at") or eq(op, "hover")) {
         const p = point(arg) orelse return error.BadPoint;
