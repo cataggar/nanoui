@@ -555,7 +555,7 @@ pub fn makePlanePipeline(device: objc.Object, library: objc.Object) anyerror!obj
     return makePipelineFor(device, library, "fs_plane", 1, metal_hdr.rgba16f);
 }
 
-fn makePipelineFor(device: objc.Object, library: objc.Object, comptime fragment: []const u8, src: objc.NSUInteger, format: objc.NSUInteger) !objc.Object {
+pub fn makePipelineFor(device: objc.Object, library: objc.Object, comptime fragment: []const u8, src: objc.NSUInteger, format: objc.NSUInteger) !objc.Object {
     const vs = objc.msg(objc.Object, library, "newFunctionWithName:", .{objc.nsString("vs")});
     defer objc.release(vs);
     const fs = objc.msg(objc.Object, library, "newFunctionWithName:", .{objc.nsString(fragment)});

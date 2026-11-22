@@ -54,7 +54,7 @@ pub var smoothing_allowed: ?bool = null;
 
 fn smoothingAllowed() bool {
     if (smoothing_allowed) |v| return v;
-    if (builtin.os.tag != .macos) return true;
+    if (comptime builtin.os.tag != .macos or @import("../backend.zig").is_embed) return true;
     var allowed = true;
     const key = cf.string("AppleFontSmoothing");
     defer cf.CFRelease(@ptrCast(key));

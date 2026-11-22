@@ -14,21 +14,22 @@ const utf8 = @import("utf8.zig");
 const cjk_break = @import("cjk_break.zig");
 const stacks = @import("text_stack_tt.zig");
 const registry = @import("font_registry.zig");
+const backend = @import("../backend.zig");
 pub const rich = @import("rich_tt.zig");
-/// Windows draws glyphs with DirectWrite (`dwrite.zig`).
-const native_windows = @import("dwrite.zig").enabled;
+/// Windows draws glyphs with DirectWrite (`dwrite.zig`) unless in embed mode.
+const native_windows = @import("dwrite.zig").enabled and !backend.is_embed;
 
 pub const Atlas = atlas_mod.Atlas;
 pub const Sprite = atlas_mod.Sprite;
 pub const subpixel_bins = atlas_mod.subpixel_bins;
 
-const desktop = switch (builtin.os.tag) {
+const has_desktop_paths = !backend.is_embed and builtin.os.tag != .freestanding and builtin.os.tag != .wasi;
+const desktop = if (!has_desktop_paths) struct {} else switch (builtin.os.tag) {
     .macos => @import("../desktop.zig"),
     .ios => @import("../ios/desktop.zig"),
     .windows => @import("../windows/desktop.zig"),
     .linux => if (builtin.abi.isAndroid()) @import("../android/desktop.zig") else @import("../linux/desktop.zig"),
-    .wasi => struct {},
-    else => unreachable,
+    else => struct {},
 };
 
 pub const Font = struct {
@@ -97,14 +98,23 @@ pub const TextSystem = struct {
     /// How glyph origins land on device pixels.
     glyph_snap: types.GlyphSnap = .nearest,
 
+    pub const InitOptions = struct { scan_system_fonts: bool = true };
+
     pub fn init(gpa: std.mem.Allocator) TextSystem {
-        return .{ .gpa = gpa, .db = .init(gpa, std.Io.Threaded.global_single_threaded.io()), .atlas = .init(gpa), .images = .{ .gpa = gpa } };
+        return initOptions(gpa, .{ .scan_system_fonts = !backend.is_embed and builtin.os.tag != .freestanding });
+    }
+
+    pub fn initOptions(gpa: std.mem.Allocator, opts: InitOptions) TextSystem {
+        const no_fs = builtin.os.tag == .freestanding or (builtin.os.tag == .wasi and !builtin.is_test);
+        const io: ?std.Io = if (comptime no_fs) null else if (!opts.scan_system_fonts and !builtin.is_test) null else std.Io.Threaded.global_single_threaded.io();
+        return .{ .gpa = gpa, .db = .initOptions(gpa, io, .{ .scan_system = opts.scan_system_fonts }), .atlas = .init(gpa), .images = .{ .gpa = gpa } };
     }
 
     /// Called only by live window surfaces. Testers and headless snapshots use
     /// plain `init`, so they never create or write a persistent font index.
     pub fn enablePersistence(self: *TextSystem, app_name: []const u8) void {
-        if (builtin.is_test or builtin.os.tag == .wasi) return;
+        if (comptime builtin.is_test or !has_desktop_paths) return;
+        if (self.db.io == null) self.db.io = std.Io.Threaded.global_single_threaded.io();
         const dir = desktop.path(self.gpa, .cache, app_name) catch return;
         defer self.gpa.free(dir);
         self.db.enableCache(dir);
@@ -151,7 +161,7 @@ pub const TextSystem = struct {
         self.dropCaches();
     }
 
-    fn dropCaches(self: *TextSystem) void {
+    pub fn dropCaches(self: *TextSystem) void {
         self.fonts.clearRetainingCapacity();
         self.run_fonts.clearRetainingCapacity();
         self.run_faces.clearRetainingCapacity();
@@ -362,7 +372,18 @@ pub const TextSystem = struct {
         const f = self.font(style);
         const size = style.size * self.zoom;
         var x = x0;
-        if (f.id == 0xffff) return x + @as(f32, @floatFromInt(s.len)) * size * 0.5;
+        if (f.id == 0xffff) {
+            var i: usize = 0;
+            while (i < s.len) {
+                const want = utf8.seqLen(s[i]);
+                const n = @min(want, s.len - i);
+                const cp: u21 = if (n == want) std.unicode.utf8Decode(s[i .. i + n]) catch 0xfffd else 0xfffd;
+                if (cp >= 0x20 or cp == '\t') try out.append(self.gpa, .{ .font = 0xffff, .glyph = 0, .x = x, .y = 0, .index = @intCast(offset + i) });
+                x += if (cp == '\t') size * 2 else if (cp >= 0x2e80) size else size * 0.5;
+                i += n;
+            }
+            return x;
+        }
         const primary = self.run_fonts.items[f.id];
         const primary_k = size / primary.font.units_per_em;
         const primary_grid = self.gridded(f.id, primary);

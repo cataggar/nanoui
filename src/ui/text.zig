@@ -11,7 +11,8 @@ const ctx_mod = @import("context.zig");
 const Context = ctx_mod.Context;
 
 /// nanoui's own text and CPU renderer, not CoreText and Metal.
-pub const portable = options.portable or !(builtin.os.tag == .macos or builtin.os.tag == .ios);
+const opt_portable = if (@hasDecl(options, "portable")) options.portable else false;
+pub const portable = opt_portable or @import("../backend.zig").is_embed or !(builtin.os.tag == .macos or builtin.os.tag == .ios);
 const impl = if (portable) @import("text_tt.zig") else @import("text_mac.zig");
 
 pub const TextSystem = impl.TextSystem;

@@ -141,7 +141,7 @@ const Band = struct {
 
     /// Draws the region's rows, shared among threads when there are many.
     fn share(job: *const Band) void {
-        if (@import("builtin").single_threaded) return job.rows(job.region[1], job.region[3]);
+        if (@import("builtin").single_threaded or @import("builtin").os.tag == .freestanding) return job.rows(job.region[1], job.region[3]);
         const height = job.region[3] - job.region[1];
         const cpus = std.Thread.getCpuCount() catch 1;
         const n = @max(1, @min(threads, thread_limit, cpus, job.work() / min_pixels));
@@ -525,9 +525,10 @@ fn quad(out: gpu.Pixels, i: *const gpu.Instance, gradients: []const [4]f32, scal
 /// it: its backdrop read from the pixels so far, then its color at each
 /// pixel, by its rounded edge's coverage.
 fn pane(out: gpu.Pixels, i: *const gpu.Instance, scale: f32, b: [4]usize) void {
+    const page_gpa = @import("../backend.zig").page_or_wasm_allocator;
     const plan = glass.backdropFor(i.*, scale, out.width, out.height) orelse return;
-    const im = glass.readBackdrop(std.heap.page_allocator, out, plan) catch return;
-    defer std.heap.page_allocator.free(im.pix);
+    const im = glass.readBackdrop(page_gpa, out, plan) catch return;
+    defer page_gpa.free(im.pix);
     const inv = 1 / scale;
     const hw = i.rect[2] * 0.5;
     const hh = i.rect[3] * 0.5;

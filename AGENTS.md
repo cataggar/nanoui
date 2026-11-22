@@ -100,6 +100,9 @@ src/ui/input.zig      keys, shortcuts, text operations, one event's input
 src/ui/layout.zig     flexbox: measure, arrange, grow, shrink, absolute, scroll
 src/ui/paint.zig      tree → GPU instances, clipping, culling, scrollbars
 src/ui/frame.zig      one frame, shared by windows and the Tester; frame stats
+src/backend.zig       compile-time backend selector (-Dbackend=auto|none|metal|d3d11|opengl|gles|webgpu)
+src/ui/contract.zig   render packet ABI (192-byte Instance), FrameOutput, DirtyRect, pass-barrier iterator
+src/ui/embed.zig      windowless zero-dependency Host (ui.embed) and pass encoders (embed_pass, metal_embed)
 src/ui/widgets.zig    boxes, text, icons, buttons, toggles, sliders, …
 src/ui/div.zig        GPUI-style elements: ui.div(c).row().gap(8)…
 src/ui/list.zig       virtualized list (GPUI's uniform_list)
@@ -163,7 +166,9 @@ tools/ios/            app bundles (bundle.zig, finish.sh, check-bundle.sh), the 
 tools/android/        APKs (apk.zig: the SDK, the manifest, aapt2, pack.zig, apksigner), run.sh, emulator.sh
 tools/web/            wasm32-wasi (+simd128) build helpers, WebGPU/WebGL2 parity & browser tests, headless bench
 tools/wazig/          LLVM-free wazig + Wasmtime build and test driver (json.zig, configurer.zig, build.py)
-examples/             hello (webview), counter and gallery (native UI), browser (local and remote pages)
+tools/embed_build.zig -Dbackend=none embedded steps, wasm32-freestanding zero-import verifier, WASI reactor
+docs/embedding.md     render packet contract, 192-byte Instance layout, blending, and Host lifecycle
+examples/             hello (webview), counter and gallery (native UI), browser (pages), embedded (headless Host)
 hillclimb/            headless benchmarks against mygo (its own package)
 apps/nanoterm/        the first app: a Warp-like terminal with ACP agents
 apps/nanomon/         a small activity monitor (libproc, Mach, /proc)
@@ -186,6 +191,8 @@ tools/version.sh      set or check the version (build.zig.zon) for a release
 zig build                 # build every example into zig-out/bin
 zig build test            # unit and widget tests (renders offscreen with Metal)
 zig build test -Dportable=true   # the same with nanoui's own text and CPU renderer
+zig build test-embed      # -Dbackend=none host tests, wasm32-freestanding 0-import check, WASI reactor
+zig build run-embedded    # headless -Dbackend=none Host example (zero external dependencies)
 zig build test-bin -Dtarget=aarch64-linux-gnu --prefix zig-out/linux   # Linux tests, run in the container
 zig build lines           # enforce the 600-line limit
 zig build run-hello       # webview + typed IPC

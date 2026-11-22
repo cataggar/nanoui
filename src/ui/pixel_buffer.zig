@@ -5,7 +5,10 @@ const std = @import("std");
 const builtin = @import("builtin");
 const gpu = @import("gpu.zig");
 
-pub const enabled = builtin.os.tag == .macos or builtin.os.tag == .ios;
+const backend = @import("../backend.zig");
+
+pub const enabled = (builtin.os.tag == .macos or builtin.os.tag == .ios) and
+    (backend.current == .auto or backend.current == .metal);
 
 extern "c" fn CVPixelBufferGetPixelFormatType(pb: *anyopaque) u32;
 extern "c" fn CVPixelBufferGetWidth(pb: *anyopaque) usize;

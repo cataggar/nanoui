@@ -10,12 +10,15 @@ const ui = nanoui.ui;
 const types = @import("ui/types.zig");
 const Content = @import("ui/content.zig").Content;
 const hooks = @import("ui/context_hooks.zig");
+const backend = @import("backend.zig");
+const build_options = @import("build_options");
+const in_rt = if (@hasDecl(build_options, "in_rt")) build_options.in_rt else false;
 
-pub const desktop = builtin.os.tag == .macos;
-pub const enabled = desktop and !@import("build_options").in_rt and !builtin.is_test;
+pub const desktop = builtin.os.tag == .macos and !backend.is_embed;
+pub const enabled = !backend.is_embed and desktop and !in_rt and !builtin.is_test;
 
 comptime {
-    if (desktop and @import("build_options").in_rt) {
+    if (!backend.is_embed and desktop and in_rt) {
         @export(&nanoui_rt_panic, .{ .name = "nanoui_rt_panic" });
         @export(&nanoui_rt_app_create, .{ .name = "nanoui_rt_app_create" });
         @export(&nanoui_rt_app_create_minimal, .{ .name = "nanoui_rt_app_create_minimal" });

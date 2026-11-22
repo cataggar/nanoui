@@ -21,10 +21,11 @@ comptime {
 }
 
 /// The platform's implementations, chosen at compile time.
+pub const backend = @import("backend.zig");
 const mac = builtin.os.tag == .macos;
 /// Android is Linux to Zig; nanoui's own there (`src/android/`).
 const is_android = builtin.abi.isAndroid();
-const plat = switch (builtin.os.tag) {
+const plat = if (!backend.has_platform) struct {} else switch (builtin.os.tag) {
     .macos => struct {
         pub const app = @import("app.zig");
         pub const window = @import("window.zig");
@@ -74,36 +75,37 @@ const plat = switch (builtin.os.tag) {
 
 /// Android's entry and panic handler, for an app's library's root
 /// (`android.library` in build.zig makes it).
-pub const web = if (builtin.os.tag == .wasi) @import("web/web.zig") else struct {};
-pub const android = if (is_android) @import("android/main.zig") else struct {};
+pub const web = if (backend.has_platform or builtin.os.tag == .wasi) (if (builtin.os.tag == .wasi and !backend.is_embed) @import("web/web.zig") else struct {}) else struct {};
+pub const android = if (backend.has_platform and is_android) @import("android/main.zig") else struct {};
 
 /// The Objective-C runtime (macOS and iOS).
-pub const objc = if (mac or builtin.os.tag == .ios) @import("objc.zig") else struct {};
+pub const objc = if ((mac or builtin.os.tag == .ios) and (backend.has_platform or backend.current == .metal)) @import("objc.zig") else struct {};
 pub const ui = @import("ui/ui.zig");
+pub const embed = ui.embed;
 /// HTTP requests answered on the main thread (http.zig).
-pub const http = @import("http.zig");
+pub const http = if (backend.is_embed) struct {} else @import("http.zig");
 /// Haptic taps (iOS; nothing elsewhere).
-pub const haptics = @import("basics/haptics.zig");
+pub const haptics = if (backend.is_embed) struct {} else @import("basics/haptics.zig");
 /// The device's location (iOS, Core Location).
-pub const location = @import("basics/location.zig");
+pub const location = if (backend.is_embed) struct {} else @import("basics/location.zig");
 /// Small values kept between launches (NSUserDefaults on Apple platforms).
-pub const kv = @import("basics/kv.zig");
+pub const kv = if (backend.is_embed) struct {} else @import("basics/kv.zig");
 /// A map: MapKit under the UI on iOS, a placeholder elsewhere.
-pub const map = @import("basics/map.zig");
+pub const map = if (backend.is_embed) struct {} else @import("basics/map.zig");
 /// Walking directions (iOS, MapKit's MKDirections).
-pub const directions = @import("basics/directions.zig");
+pub const directions = if (backend.is_embed) struct {} else @import("basics/directions.zig");
 /// Components after GPUI Kit: buttons, overlays, tabs, forms, toasts.
 pub const kit = @import("kit/kit.zig");
 pub const tsgen = @import("tsgen.zig");
 /// A native-UI window's surface: macOS's NSView, Windows' HWND client
 /// (`after_frame`, `nativeHandle`, `ctx`).
-pub const Surface = if (mac) @import("ui/surface.zig").Surface else if (builtin.os.tag == .windows) @import("windows/surface.zig").Surface else void;
-pub const a11y = if (mac) @import("ui/a11y.zig") else struct {};
+pub const Surface = if (!backend.has_platform) void else if (mac) @import("ui/surface.zig").Surface else if (builtin.os.tag == .windows) @import("windows/surface.zig").Surface else void;
+pub const a11y = if (backend.has_platform and mac) @import("ui/a11y.zig") else struct {};
 
-pub const App = if (builtin.os.tag == .wasi) opaque {} else plat.app.App;
-pub const AppOptions = plat.app.Options;
-pub const Window = if (builtin.os.tag == .wasi) opaque {} else plat.window.Window;
-pub const WindowOptions = plat.window.Options;
+pub const App = if (!backend.has_platform or builtin.os.tag == .wasi) opaque {} else plat.app.App;
+pub const AppOptions = if (!backend.has_platform) void else plat.app.Options;
+pub const Window = if (!backend.has_platform or builtin.os.tag == .wasi) opaque {} else plat.window.Window;
+pub const WindowOptions = if (!backend.has_platform) void else plat.window.Options;
 pub const PageOptions = @import("window_types.zig").PageOptions;
 pub const PageHeader = @import("window_types.zig").PageHeader;
 pub const PageRequest = @import("window_types.zig").PageRequest;
@@ -118,39 +120,44 @@ pub const WindowLevel = @import("window_types.zig").Level;
 /// A connected screen (`App.screens`), the About panel's options
 /// (`AppOptions.about`) and what full screen hides
 /// (`App.setPresentationOptions`): macOS.
-pub const Screen = if (mac) @import("screens.zig").Screen else void;
-pub const screens = if (mac) @import("screens.zig") else struct {};
-pub const About = if (mac) @import("app_extras.zig").About else void;
-pub const Presentation = if (mac) @import("app_extras.zig").Presentation else void;
+pub const Screen = if (backend.has_platform and mac) @import("screens.zig").Screen else void;
+pub const screens = if (backend.has_platform and mac) @import("screens.zig") else struct {};
+pub const About = if (backend.has_platform and mac) @import("app_extras.zig").About else void;
+pub const Presentation = if (backend.has_platform and mac) @import("app_extras.zig").Presentation else void;
 /// A page docked in a native-UI window (`Window.dockPage`): WKWebView on
 /// macOS, WebView2 on Windows.
-pub const Page = if (mac) @import("page_webkit.zig").Page else if (builtin.os.tag == .windows) @import("page_webview2.zig").Page else void;
+pub const Page = if (!backend.has_platform) void else if (mac) @import("page_webkit.zig").Page else if (builtin.os.tag == .windows) @import("page_webview2.zig").Page else void;
 pub const Asset = @import("window_types.zig").Asset;
 /// Typed IPC for pages: wherever a webview draws them (macOS, iOS, Windows, Linux).
-const has_pages = mac or builtin.os.tag == .ios or builtin.os.tag == .windows or (builtin.os.tag == .linux and !is_android);
+const has_pages = backend.has_platform and (mac or builtin.os.tag == .ios or builtin.os.tag == .windows or (builtin.os.tag == .linux and !is_android));
 const page_ipc = if (has_pages) @import("ipc.zig").ipc(plat.window.Window, plat.app.App) else struct {};
 pub const Call = if (has_pages) page_ipc.Call else void;
 pub const Event = if (has_pages) page_ipc.Event else void;
 
-pub const menu = if (builtin.os.tag == .wasi) @import("menu_accel.zig") else plat.menu;
+pub const menu = if (!backend.has_platform or builtin.os.tag == .wasi) @import("menu_accel.zig") else plat.menu;
 pub const MenuItem = menu.MenuItem;
 pub const MenuRole = menu.Role;
 pub const Menu = menu.Menu;
 pub const MenuClick = menu.Click;
-pub const Tray = plat.tray.Tray;
-pub const TrayOptions = plat.tray.Options;
-pub const TrayClick = plat.tray.Click;
-pub const TrayAnchor = plat.tray.Anchor;
-pub const dialog = if (builtin.os.tag == .wasi) @import("dialog_types.zig") else plat.dialog;
-pub const fdwatch = plat.fdwatch;
-pub const clipboard = plat.desktop.clipboard;
-pub const shell = plat.desktop.shell;
-pub const Directory = plat.desktop.Directory;
-pub const path = plat.desktop.path;
-pub const isDark = plat.desktop.isDark;
-pub const accentColor = plat.desktop.accentColor;
+const tray_mod = if (!backend.has_platform) @import("tray_none.zig") else plat.tray;
+pub const Tray = tray_mod.Tray;
+pub const TrayOptions = tray_mod.Options;
+pub const TrayClick = tray_mod.Click;
+pub const TrayAnchor = tray_mod.Anchor;
+pub const dialog = if (!backend.has_platform or builtin.os.tag == .wasi) @import("dialog_types.zig") else plat.dialog;
+pub const fdwatch = if (!backend.has_platform) struct {} else plat.fdwatch;
+pub const clipboard = if (!backend.has_platform) struct {} else plat.desktop.clipboard;
+pub const shell = if (!backend.has_platform) struct {} else plat.desktop.shell;
+pub const Directory = if (!backend.has_platform) void else plat.desktop.Directory;
+pub const path = if (!backend.has_platform) void else plat.desktop.path;
+pub const isDark = if (!backend.has_platform) void else plat.desktop.isDark;
+pub const accentColor = if (!backend.has_platform) void else plat.desktop.accentColor;
 /// Updates from GitHub's releases for a signed app bundle (macOS).
-pub const update = @import("update.zig");
+pub const update = if (backend.is_embed) struct {
+    pub const Updater = void;
+    pub const Options = void;
+    pub const Auto = void;
+} else @import("update.zig");
 pub const Updater = update.Updater;
 pub const UpdateOptions = update.Options;
 /// Restarting into an update unseen (`Updater.autoRestart`).
@@ -164,13 +171,13 @@ pub const version = @import("build_options").version;
 /// Minimal process entry (`main(init: nanoui.Init)`), with `panic` and
 /// `std_options` delegated to `libnanoui-rt.a` so rebuilds after an edit
 /// skip recompiling `std.Io.Threaded` and DWARF unwinding in the app's unit.
-pub const Init = if (@import("rt.zig").desktop) std.process.Init.Minimal else std.process.Init;
+pub const Init = if (builtin.os.tag == .freestanding) void else if (@import("rt.zig").desktop) std.process.Init.Minimal else std.process.Init;
 pub const std_options: std.Options = .{
-    .enable_segfault_handler = !@import("rt.zig").enabled,
+    .enable_segfault_handler = builtin.os.tag != .freestanding and !@import("rt.zig").enabled,
     .allow_stack_tracing = !@import("rt.zig").enabled,
     .unexpected_error_tracing = !@import("rt.zig").enabled,
 };
-pub const std_options_debug_threaded_io: ?*std.Io.Threaded = if (@import("rt.zig").enabled) null else std.Io.Threaded.global_single_threaded;
+pub const std_options_debug_threaded_io = if (builtin.os.tag == .freestanding or @import("rt.zig").enabled) null else std.Io.Threaded.global_single_threaded;
 pub const panic = if (@import("rt.zig").enabled) std.debug.FullPanic(rtPanic) else std.debug.FullPanic(std.debug.defaultPanic);
 
 fn rtPanic(msg: []const u8, first_trace_addr: ?usize) noreturn {
@@ -181,6 +188,14 @@ fn rtPanic(msg: []const u8, first_trace_addr: ?usize) noreturn {
 }
 
 test {
+    if (backend.is_embed) {
+        _ = tsgen;
+        _ = ui;
+        _ = kit;
+        std.testing.refAllDecls(kit);
+        _ = @import("web/utf16.zig");
+        return;
+    }
     _ = tsgen;
     _ = ui;
     _ = kit;

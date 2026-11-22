@@ -13,9 +13,10 @@ const windows = @import("dwrite.zig");
 const initial_size: u32 = 512;
 const max_size: u32 = 4096;
 const pad: u32 = 1;
+const native_windows = windows.enabled and !@import("../backend.zig").is_embed;
 // Common multiple of DirectWrite's 6 (ClearType), 8 (natural), 4
 // (symmetric), and 2 (high-DPI downsampled) positions per physical pixel.
-pub const subpixel_bins = if (windows.enabled) 24 else 4;
+pub const subpixel_bins = if (native_windows) 24 else 4;
 
 /// A glyph in the atlas, placed relative to its pen position on the
 /// baseline, in points.
@@ -60,6 +61,8 @@ pub const Atlas = struct {
     generation: u64 = 0,
     /// Bumped when it starts over: a glyph may now be where another was.
     resets: u64 = 0,
+    /// Bounding `{ x, y, width, height }` of texels modified since `takeDirtyRect`.
+    dirty_rect: ?[4]u32 = null,
     scratch: std.ArrayList(u8) = .empty,
     native: windows.Cache = .{},
     phase_counts: std.AutoHashMapUnmanaged(u16, u8) = .empty,
@@ -67,12 +70,12 @@ pub const Atlas = struct {
     pub fn init(gpa: std.mem.Allocator) Atlas {
         const px = gpa.alloc(u8, @as(usize, initial_size) * initial_size) catch return .{ .gpa = gpa, .pixels = &.{}, .native_pixels = &.{}, .size = 0 };
         @memset(px, 0);
-        const rgb = gpa.alloc(u8, if (windows.enabled) px.len * 4 else 0) catch {
+        const rgb = gpa.alloc(u8, if (native_windows) px.len * 4 else 0) catch {
             gpa.free(px);
             return .{ .gpa = gpa, .pixels = &.{}, .native_pixels = &.{}, .size = 0 };
         };
         @memset(rgb, 0);
-        return .{ .gpa = gpa, .pixels = px, .native_pixels = rgb };
+        return .{ .gpa = gpa, .pixels = px, .native_pixels = rgb, .dirty_rect = .{ 0, 0, initial_size, initial_size } };
     }
 
     pub fn deinit(a: *Atlas) void {
@@ -112,6 +115,29 @@ pub const Atlas = struct {
         @memset(a.native_pixels, 0);
         a.generation += 1;
         a.resets += 1;
+        a.dirty_rect = if (a.size > 0) .{ 0, 0, a.size, a.size } else null;
+    }
+
+    pub fn peekDirtyRect(a: *const Atlas) ?[4]u32 {
+        return a.dirty_rect;
+    }
+
+    pub fn takeDirtyRect(a: *Atlas) ?[4]u32 {
+        defer a.dirty_rect = null;
+        return a.dirty_rect;
+    }
+
+    fn markDirty(a: *Atlas, x: u32, y: u32, w: u32, h: u32) void {
+        if (w == 0 or h == 0) return;
+        if (a.dirty_rect) |r| {
+            const x0 = @min(r[0], x);
+            const y0 = @min(r[1], y);
+            const x1 = @max(r[0] + r[2], x + w);
+            const y1 = @max(r[1] + r[3], y + h);
+            a.dirty_rect = .{ x0, y0, x1 - x0, y1 - y0 };
+        } else {
+            a.dirty_rect = .{ x, y, w, h };
+        }
     }
 
     fn makeRoom(a: *Atlas) void {
@@ -121,7 +147,7 @@ pub const Atlas = struct {
                 a.reset_during_frame = true;
                 return;
             };
-            const native_bigger = a.gpa.alloc(u8, if (windows.enabled) bigger.len * 4 else 0) catch {
+            const native_bigger = a.gpa.alloc(u8, if (native_windows) bigger.len * 4 else 0) catch {
                 a.gpa.free(bigger);
                 a.reset();
                 a.reset_during_frame = true;
@@ -175,6 +201,7 @@ pub const Atlas = struct {
             const dst = (at[1] + y) * a.size + at[0];
             @memcpy(a.pixels[dst..][0..w], src[y * w ..][0..w]);
         }
+        a.markDirty(at[0], at[1], w, h);
         a.generation += 1;
     }
 
@@ -193,7 +220,7 @@ pub const Atlas = struct {
     }
 
     pub fn positions(a: *Atlas, id: u16, rf: RunFont) u8 {
-        if (!windows.enabled) return 4;
+        if (!native_windows) return 4;
         if (a.phase_counts.get(id)) |n| return n;
         const n = a.native.positions(a.gpa, rf, a.scale) catch {
             a.native.failures += 1;
@@ -204,7 +231,7 @@ pub const Atlas = struct {
     }
 
     fn rasterize(a: *Atlas, rf: RunFont, g: u16, bin: u8) ?Sprite {
-        if (windows.enabled) {
+        if (native_windows) {
             const bitmap = (a.native.rasterize(a.gpa, rf, g, a.scale, @as(f32, @floatFromInt(bin)) / subpixel_bins) catch {
                 a.native.failures += 1;
                 return a.rasterizePortable(rf, g, bin);
@@ -302,3 +329,18 @@ pub const Atlas = struct {
         };
     }
 };
+
+test "dirty_rect unions blits, clears on take, and covers full atlas on reset" {
+    var a = Atlas.init(std.testing.allocator);
+    defer a.deinit();
+    try std.testing.expectEqual(@as(?[4]u32, .{ 0, 0, initial_size, initial_size }), a.peekDirtyRect());
+    try std.testing.expectEqual(@as(?[4]u32, .{ 0, 0, initial_size, initial_size }), a.takeDirtyRect());
+    try std.testing.expectEqual(@as(?[4]u32, null), a.peekDirtyRect());
+    const bitmap: [16]u8 = @splat(255);
+    a.blit(.{ 4, 6 }, 4, 4, &bitmap);
+    a.blit(.{ 12, 2 }, 4, 4, &bitmap);
+    try std.testing.expectEqual(@as(?[4]u32, .{ 4, 2, 12, 8 }), a.takeDirtyRect());
+    try std.testing.expectEqual(@as(?[4]u32, null), a.takeDirtyRect());
+    a.reset();
+    try std.testing.expectEqual(@as(?[4]u32, .{ 0, 0, initial_size, initial_size }), a.takeDirtyRect());
+}

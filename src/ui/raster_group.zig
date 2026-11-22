@@ -5,6 +5,7 @@
 //! renderers keep their layer textures): a group no longer maps, clears and
 //! unmaps one every frame.
 const std = @import("std");
+const page_gpa = @import("../backend.zig").page_or_wasm_allocator;
 const raster = @import("raster.zig");
 const types = @import("types.zig");
 const gpu = @import("gpu.zig");
@@ -42,8 +43,8 @@ pub fn draw(
     const area = if (glassy) region else b;
     const len = out.width * out.height * 4;
     const kept = keptLayer(depth, len);
-    const tmp_bytes = kept orelse (std.heap.page_allocator.alloc(u8, len) catch return);
-    defer if (kept == null) std.heap.page_allocator.free(tmp_bytes);
+    const tmp_bytes = kept orelse (page_gpa.alloc(u8, len) catch return);
+    defer if (kept == null) page_gpa.free(tmp_bytes);
     const tmp: gpu.Pixels = .{ .bytes = tmp_bytes, .width = out.width, .height = out.height };
     // Masked, `drawRegionDepth` clears the area itself.
     if (glassy) @memset(tmp_bytes, 0) else if (!masked) clear(tmp, area);
@@ -146,8 +147,8 @@ fn keptLayer(depth: u16, len: usize) ?[]u8 {
     if (depth >= max_depth) return null;
     const layer = &held[depth];
     if (layer.len != len) {
-        if (layer.len > 0) std.heap.page_allocator.free(layer.*);
-        layer.* = std.heap.page_allocator.alloc(u8, len) catch &.{};
+        if (layer.len > 0) page_gpa.free(layer.*);
+        layer.* = page_gpa.alloc(u8, len) catch &.{};
     }
     return if (layer.len == len) layer.* else null;
 }
@@ -156,7 +157,7 @@ fn keptLayer(depth: u16, len: usize) ?[]u8 {
 /// drawn).
 pub fn freeLayers() void {
     for (&held) |*layer| {
-        if (layer.len > 0) std.heap.page_allocator.free(layer.*);
+        if (layer.len > 0) page_gpa.free(layer.*);
         layer.* = &.{};
     }
 }
