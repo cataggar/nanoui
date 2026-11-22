@@ -11,45 +11,13 @@ const Window = window_mod.Window;
 const observers = @import("app_observers.zig");
 const app_timer = @import("app_timer.zig");
 
-pub const Options = struct {
-    name: []const u8 = "nanoui",
-    /// Quit when the last window closes.
-    quit_on_last_window_closed: bool = true,
-    /// Given to the hooks below.
-    ctx: ?*anyopaque = null,
-    /// Links the system asks the app to open (the default browser's).
-    on_open_urls: ?*const fn (ctx: ?*anyopaque, urls: []const []const u8) void = null,
-    /// The Dock icon was clicked with no window showing.
-    on_reopen: ?*const fn (ctx: ?*anyopaque) void = null,
-    /// The Dock icon's menu, above the system's items.
-    dock_menu: ?[]const menu_mod.MenuItem = null,
-    /// The app is about to quit (⌘Q, its last window, `quit`): save what must be saved.
-    on_terminate: ?*const fn (ctx: ?*anyopaque) void = null,
-    /// Handoff from another device: the page's address.
-    on_continue_activity: ?*const fn (ctx: ?*anyopaque, url: []const u8) void = null,
-    /// The app became active (true) or stopped being active.
-    on_active: ?*const fn (ctx: ?*anyopaque, active: bool) void = null,
-    /// The system changed between light and dark appearance.
-    on_appearance_change: ?*const fn (ctx: ?*anyopaque, dark: bool) void = null,
-    /// The computer is about to sleep.
-    on_sleep: ?*const fn (ctx: ?*anyopaque) void = null,
-    /// The computer woke from sleep.
-    on_wake: ?*const fn (ctx: ?*anyopaque) void = null,
-    /// What the About panel (the menu's `.about` role, `showAbout`) shows.
-    about: extras.About = .{},
-    /// `.accessory`: a menu bar app (a tray, `LSUIElement`), with no Dock
-    /// icon and no menu bar of its own, which can still show windows: it
-    /// does not come forward at launch, and a window it shows comes
-    /// forward with `Window.focus`. `.regular`: a Dock icon and menus,
-    /// whatever the bundle's Info.plist says.
-    activation: Activation = .regular,
-};
+pub const Options = @import("app_options.zig").Options;
 
 const extras = @import("app_extras.zig");
 pub const About = extras.About;
 pub const Presentation = extras.Presentation;
 pub const Screen = @import("screens.zig").Screen;
-pub const Activation = enum { regular, accessory };
+pub const Activation = @import("app_options.zig").Activation;
 
 /// `NSApplicationActivationPolicy`: regular (0), accessory (1), or
 /// prohibited (2) for hidden runs, which never show anything.
@@ -333,6 +301,7 @@ pub const App = struct {
     /// Stops the event loop; `run` returns once the current event is handled.
     pub fn quit(self: *App) void {
         if (self.stopping) return;
+        if (self.options.should_terminate) |f| if (!f(self.options.ctx)) return;
         self.stopping = true;
         if (self.options.on_terminate) |f| f(self.options.ctx);
         if (!self.running) return;
@@ -498,13 +467,43 @@ fn shouldTerminate(self_obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(
     return 0; // NSTerminateCancel
 }
 
+pub const ReopenAction = enum { keep_visible, restore_minimized, call_reopen, appkit_default };
+
+/// Chooses Dock-reopen handling from the app's own windows rather than
+/// AppKit's `hasVisibleWindows:` flag, which is YES even when only a
+/// miniaturized window exists.
+pub fn decideReopen(has_on_screen: bool, has_minimized: bool, has_on_reopen: bool) ReopenAction {
+    if (has_on_screen) return .keep_visible;
+    if (has_minimized) return .restore_minimized;
+    if (has_on_reopen) return .call_reopen;
+    return .appkit_default;
+}
+
 fn shouldReopen(self_obj: objc.Object, _: objc.SEL, _: objc.Object, visible: objc.BOOL) callconv(.c) objc.BOOL {
-    const app = objc.getZig(App, self_obj) orelse return !visible;
-    if (!visible) if (app.options.on_reopen) |f| {
-        f(app.options.ctx);
-        return objc.NO;
+    _ = visible;
+    const app = objc.getZig(App, self_obj) orelse return objc.YES;
+    var has_on_screen = false;
+    var first_minimized: ?*Window = null;
+    for (app.windows.items) |w| {
+        if (w.closed) continue;
+        const mini = objc.msg(objc.BOOL, w.nswindow, "isMiniaturized", .{});
+        const vis = objc.msg(objc.BOOL, w.nswindow, "isVisible", .{});
+        if (vis and !mini) has_on_screen = true;
+        if (mini and first_minimized == null) first_minimized = w;
+    }
+    return switch (decideReopen(has_on_screen, first_minimized != null, app.options.on_reopen != null)) {
+        .keep_visible => objc.YES,
+        .restore_minimized => blk: {
+            objc.msg(void, first_minimized.?.nswindow, "deminiaturize:", .{@as(?objc.Object, null)});
+            first_minimized.?.focus();
+            break :blk objc.NO;
+        },
+        .call_reopen => blk: {
+            app.options.on_reopen.?(app.options.ctx);
+            break :blk objc.NO;
+        },
+        .appkit_default => objc.YES,
     };
-    return !visible;
 }
 
 fn openURLs(self_obj: objc.Object, _: objc.SEL, _: objc.Object, urls: objc.Object) callconv(.c) void {

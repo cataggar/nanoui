@@ -9,6 +9,13 @@ const w = @import("windows/win32.zig");
 const Com = wv.Com;
 const HRESULT = wv.HRESULT;
 
+const forbidden_headers = std.unicode.utf8ToUtf16LeStringLiteral("Content-Type: text/plain\r\n");
+
+/// A zero-allocation 403 response for fail-closed `allow_request` paths.
+pub fn makeForbiddenResponse(env: *Com, out: *?*Com) HRESULT {
+    return wv.Environment.createResponse(env, null, 403, reasonZ(403), forbidden_headers, out);
+}
+
 /// `env.CreateWebResourceResponse(stream, status, reason, headers)`.
 pub fn makeResponse(env: *Com, served: page.Served, gpa: std.mem.Allocator, out: *?*Com) HRESULT {
     const headers = headersZ(gpa, served.mime) orelse return -1;
@@ -48,6 +55,7 @@ extern "ole32" fn CreateStreamOnHGlobal(mem: ?*anyopaque, delete_on_release: i32
 fn reasonZ(status: u16) [*:0]const u16 {
     return switch (status) {
         200 => std.unicode.utf8ToUtf16LeStringLiteral("OK"),
+        403 => std.unicode.utf8ToUtf16LeStringLiteral("Forbidden"),
         else => std.unicode.utf8ToUtf16LeStringLiteral("Not Found"),
     };
 }

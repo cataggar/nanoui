@@ -21,6 +21,12 @@ pub const iconButton = button_mod.iconButton;
 pub const ButtonOptions = button_mod.Options;
 pub const Variant = button_mod.Variant;
 
+const kbd_mod = @import("kbd.zig");
+pub const kbd = kbd_mod.kbd;
+pub const kbdWith = kbd_mod.kbdWith;
+pub const KbdOptions = kbd_mod.Options;
+pub const KbdSize = kbd_mod.Size;
+
 const display = @import("display.zig");
 pub const tag = display.tag;
 pub const badge = display.badge;
@@ -168,4 +174,5 @@ pub fn statusIcon(s: Status) []const u8 {
 test {
     _ = @import("tests.zig");
     _ = @import("tests_timeline.zig");
+    _ = @import("kbd.zig");
 }

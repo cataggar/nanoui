@@ -46,7 +46,7 @@ const plat = switch (builtin.os.tag) {
         pub const app = @import("linux/app.zig");
         pub const window = @import("linux/window.zig");
         pub const menu = @import("menu_accel.zig");
-        pub const tray = @import("tray_none.zig");
+        pub const tray = @import("linux/tray.zig");
         pub const dialog = @import("linux/dialog.zig");
         pub const desktop = @import("linux/desktop.zig");
         pub const fdwatch = @import("linux/fdwatch.zig");
@@ -74,6 +74,7 @@ const plat = switch (builtin.os.tag) {
 
 /// Android's entry and panic handler, for an app's library's root
 /// (`android.library` in build.zig makes it).
+pub const web = if (builtin.os.tag == .wasi) @import("web/web.zig") else struct {};
 pub const android = if (is_android) @import("android/main.zig") else struct {};
 
 /// The Objective-C runtime (macOS and iOS).
@@ -99,11 +100,19 @@ pub const tsgen = @import("tsgen.zig");
 pub const Surface = if (mac) @import("ui/surface.zig").Surface else if (builtin.os.tag == .windows) @import("windows/surface.zig").Surface else void;
 pub const a11y = if (mac) @import("ui/a11y.zig") else struct {};
 
-pub const App = plat.app.App;
+pub const App = if (builtin.os.tag == .wasi) opaque {} else plat.app.App;
 pub const AppOptions = plat.app.Options;
-pub const Window = plat.window.Window;
+pub const Window = if (builtin.os.tag == .wasi) opaque {} else plat.window.Window;
 pub const WindowOptions = plat.window.Options;
-pub const PageOptions = plat.window.PageOptions;
+pub const PageOptions = @import("window_types.zig").PageOptions;
+pub const PageHeader = @import("window_types.zig").PageHeader;
+pub const PageRequest = @import("window_types.zig").PageRequest;
+pub const page_request = @import("page_request.zig");
+pub const PageDropDecision = @import("window_types.zig").PageDropDecision;
+pub const PageDropPhase = @import("window_types.zig").PageDropPhase;
+pub const PageDropOffer = @import("window_types.zig").PageDropOffer;
+pub const PageDropEvent = @import("window_types.zig").PageDropEvent;
+pub const PageFileDrop = @import("window_types.zig").PageFileDrop;
 /// How high a window stacks (`WindowOptions.level`, `Window.setLevel`).
 pub const WindowLevel = @import("window_types.zig").Level;
 /// A connected screen (`App.screens`), the About panel's options
@@ -116,23 +125,23 @@ pub const Presentation = if (mac) @import("app_extras.zig").Presentation else vo
 /// A page docked in a native-UI window (`Window.dockPage`): WKWebView on
 /// macOS, WebView2 on Windows.
 pub const Page = if (mac) @import("page_webkit.zig").Page else if (builtin.os.tag == .windows) @import("page_webview2.zig").Page else void;
-pub const Asset = plat.window.Asset;
+pub const Asset = @import("window_types.zig").Asset;
 /// Typed IPC for pages: wherever a webview draws them (macOS, iOS, Windows, Linux).
 const has_pages = mac or builtin.os.tag == .ios or builtin.os.tag == .windows or (builtin.os.tag == .linux and !is_android);
 const page_ipc = if (has_pages) @import("ipc.zig").ipc(plat.window.Window, plat.app.App) else struct {};
 pub const Call = if (has_pages) page_ipc.Call else void;
 pub const Event = if (has_pages) page_ipc.Event else void;
 
-pub const menu = plat.menu;
-pub const MenuItem = plat.menu.MenuItem;
-pub const MenuRole = plat.menu.Role;
-pub const Menu = plat.menu.Menu;
-pub const MenuClick = plat.menu.Click;
+pub const menu = if (builtin.os.tag == .wasi) @import("menu_accel.zig") else plat.menu;
+pub const MenuItem = menu.MenuItem;
+pub const MenuRole = menu.Role;
+pub const Menu = menu.Menu;
+pub const MenuClick = menu.Click;
 pub const Tray = plat.tray.Tray;
 pub const TrayOptions = plat.tray.Options;
 pub const TrayClick = plat.tray.Click;
 pub const TrayAnchor = plat.tray.Anchor;
-pub const dialog = plat.dialog;
+pub const dialog = if (builtin.os.tag == .wasi) @import("dialog_types.zig") else plat.dialog;
 pub const fdwatch = plat.fdwatch;
 pub const clipboard = plat.desktop.clipboard;
 pub const shell = plat.desktop.shell;
@@ -177,6 +186,8 @@ test {
     _ = kit;
     // A page's platform-free parts: the asset table, the origin, the bridge.
     _ = @import("tests_page.zig");
+    _ = @import("page_request.zig");
+    _ = @import("page_drop.zig");
     std.testing.refAllDecls(kit);
     _ = @import("menu_types.zig");
     _ = @import("update.zig");
@@ -194,8 +205,14 @@ test {
     if (builtin.os.tag != .ios) _ = @import("update_portable.zig");
     // The Windows tray's menu model and callback decoding, platform-free.
     if (builtin.os.tag != .ios) _ = @import("windows/tray_model.zig");
+    // The Linux tray's menu tree and its pixels, platform-free too.
+    if (builtin.os.tag != .ios) _ = @import("linux/tray_menu.zig");
     // Windows' virtual keys as nanoui names them: key-ups, the repeat bit.
     if (builtin.os.tag != .ios) _ = @import("windows/key_names.zig");
+    // An HDR output's display info, worked out on any host.
+    if (builtin.os.tag != .ios) _ = @import("windows/hdr_output.zig");
+    // Linux renderer selection policy, platform-free model & tests.
+    _ = @import("linux/renderer.zig");
     if (is_android) {
         inline for (.{ plat.app, plat.window, plat.dialog, plat.desktop, plat.fdwatch, @import("android/surface.zig"), @import("android/keys.zig"), @import("android/touch.zig"), @import("android/activity.zig"), @import("android/bars.zig"), @import("android/egl.zig"), @import("android/jni.zig") }) |m| std.testing.refAllDecls(m);
         inline for (.{ plat.app.App, plat.window.Window, plat.desktop.clipboard, plat.desktop.shell, @import("android/surface.zig").Surface }) |T| std.testing.refAllDecls(T);
@@ -222,6 +239,8 @@ test {
             _ = @import("windows/tests_keys.zig");
             // Mouse buttons: the middle one, one press at a time, capture lost.
             _ = @import("windows/tests_mouse.zig");
+            // A pen's POINTER_PEN_INFO read into `Input.pen`.
+            _ = @import("windows/surface_win_pen.zig");
             // The window's own: styles, sizes, the close veto, the timers.
             _ = @import("windows/tests_window.zig");
             // Frames on the display's beat, gathered input, the frame log.
@@ -234,6 +253,7 @@ test {
             _ = @import("windows/cursor.zig");
             _ = @import("page_webview2_dock.zig");
             _ = @import("windows/tests_webview2_lifetime.zig");
+            _ = @import("windows/tests_webview2_security.zig");
             _ = @import("windows/app.zig");
             // The notification area's icon: the shell calls and the popup.
             std.testing.refAllDecls(@import("windows/tray.zig").Tray);
@@ -250,8 +270,11 @@ test {
         }
         // The GTK window's: decorations, the taskbar hint, opacity.
         if (builtin.os.tag == .linux) _ = @import("linux/tests_window.zig");
+        // A tray on a private session bus, when the suite has one.
+        if (builtin.os.tag == .linux) _ = @import("linux/tests_tray.zig");
         // A page in WebKitGTK, end to end, where one is installed.
         if (builtin.os.tag == .linux) _ = @import("linux/tests_page.zig");
+        if (builtin.os.tag == .linux) _ = @import("tests_page_request.zig");
         return;
     }
     // Analyze every declaration, used by an example or not.
@@ -274,4 +297,8 @@ test {
     _ = @import("tests_window_more.zig");
     // The mouse buttons: the middle one, one press at a time.
     _ = @import("tests_window_mouse.zig");
+    // Deferred page loading, custom headers, and cross-origin redirect stripping.
+    _ = @import("tests_page_request.zig");
+    // Opt-in native file-drop callbacks over webview content.
+    _ = @import("tests_page_drop.zig");
 }

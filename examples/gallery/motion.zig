@@ -20,6 +20,8 @@ pub const Demo = struct {
     seed: u64 = 7,
     /// The shared chip sits on the right.
     chip_right: bool = false,
+    /// Rolling label morph preset index.
+    label_idx: usize = 0,
     /// Replay the letters' entrance.
     letters: u32 = 0,
 
@@ -34,7 +36,7 @@ pub const Demo = struct {
             .exit = .{ .y = 24, .opacity = 0 },
             .transition = .{ .spring = motion.Spring.snappy },
         })) |f| {
-            const t = ui.div(c).absolute().offset(28, c.size.h - 84).row().gap(10).itemsCenter().px(16).py(12).rounded(12).bg(th.text).shadow(.{ .color = .{ .a = 0.25 }, .blur = 18, .y = 6 }).motion(f);
+            const t = ui.div(c).absolute().offset(28, @import("page.zig").bodySize(c).h - 84).row().gap(10).itemsCenter().px(16).py(12).rounded(12).bg(th.text).shadow(.{ .color = .{ .a = 0.25 }, .blur = 18, .y = 6 }).motion(f);
             defer t.end();
             ui.icon(c, "checkmark.circle.fill", .{ .size = 15, .color = th.success });
             ui.text(c, "Saved. Click the button again to hide me.", .{ .color = th.background });
@@ -44,9 +46,9 @@ pub const Demo = struct {
     fn content(d: *Demo, c: *ui.Context) void {
         const sc = ui.div(c).column().sizeFull().scrollY().p(if (@import("phone.zig").compact(c)) 24 else 28).gap(20);
         defer sc.end();
-        const bar = motion.scroll.value(c, "read", sc.id(), .{ 8, @max(24, c.size.w - 56) }, .instant);
+        const bar = motion.scroll.value(c, "read", sc.id(), .{ 8, @max(24, @import("page.zig").bodySize(c).w - 56) }, .instant);
         _ = c.leaf(.{ .width = .{ .px = bar }, .height = .{ .px = 3 }, .radius = 2, .background = c.theme.accent }, .none, null);
-        ui.heading(c, "Motion");
+        @import("page.zig").demoTitle(c, "Motion");
         ui.text(c, "Springs and tweens, interruptible: click twice quickly and watch it turn.", .{ .wrap = true, .color = c.theme.muted });
         {
             // Side by side, or stacked on a phone.
@@ -59,6 +61,7 @@ pub const Demo = struct {
         d.list(c);
         d.dragSnap(c);
         d.shared(c);
+        d.rollLabels(c);
         d.typeIn(c);
         d.easings(c);
     }
@@ -96,7 +99,7 @@ pub const Demo = struct {
         if (ui.button(c, "Reset", .{ .variant = .ghost }).clicked) d.count = 0;
         // A dot breathing forever.
         const pulse = motion.keyframes(c, .{ .values = &.{ .{ .scale = 1, .opacity = 1 }, .{ .scale = 1.6, .opacity = 0.3 }, .{ .scale = 1, .opacity = 1 } }, .duration = 1.6, .repeat = null });
-        const dot = ui.div(c).w(12).h(12).roundedFull().bg(th.danger).motion(pulse);
+        const dot = ui.div(c).w(12).h(12).roundedFull().circular().bg(th.danger).motion(pulse);
         dot.end();
         ui.label(c, "live");
     }
@@ -147,7 +150,7 @@ pub const Demo = struct {
             .elasticity = 0.18,
             .transition = .{ .spring = motion.Spring.snappy },
         });
-        const knob = ui.div(c).absolute().w(32).h(32).roundedFull().bg(th.accent).control().motion(dnd.frame());
+        const knob = ui.div(c).absolute().w(32).h(32).roundedFull().circular().bg(th.accent).control().motion(dnd.frame());
         defer knob.end();
     }
 
@@ -175,6 +178,31 @@ pub const Demo = struct {
                 defer chip.end();
             }
         }
+    }
+
+    fn rollLabels(d: *Demo, c: *ui.Context) void {
+        const th = c.theme;
+        const presets = [_][]const u8{
+            "Opus 4.6 · Fast",
+            "Opus 4.7 · Fast",
+            "Sonnet 4.6 · Fast",
+            "feature/glass",
+            "fix/glass",
+            "nanoui v0.14.6",
+        };
+        const box = ui.div(c).column().wFull().gap(10);
+        defer box.end();
+        {
+            const r = ui.div(c).row().gap(8).itemsCenter();
+            defer r.end();
+            ui.text(c, "Rolling label morph", .{ .weight = .semibold });
+            ui.spacer(c);
+            if (ui.button(c, "Next label", .{}).clicked) d.label_idx = (d.label_idx + 1) % presets.len;
+        }
+        const pill = ui.div(c).row().px(14).py(8).rounded(10).bg(th.surface).border(th.border);
+        motion.rollText(c, "model-pill", presets[d.label_idx], .{ .size = 20, .weight = .semibold, .color = th.text }, .{});
+        pill.end();
+        ui.text(c, "Shared leading and trailing graphemes stay anchored while the changed middle rolls.", .{ .size = 12, .color = th.muted });
     }
 
     fn typeIn(d: *Demo, c: *ui.Context) void {
@@ -230,7 +258,7 @@ pub const Demo = struct {
             const track = ui.div(c).grow().h(4).rounded(2).bg(th.track);
             defer track.end();
             const f = motion.frame(c, .{ .target = .{ .x = if (d.played) 300 else 0 }, .transition = .{ .tween = .{ .duration = 1, .ease = e[1] } } });
-            const dot = ui.div(c).absolute().offset(0, -5).w(14).h(14).roundedFull().bg(th.accent).motion(f);
+            const dot = ui.div(c).absolute().offset(0, -5).w(14).h(14).roundedFull().circular().bg(th.accent).motion(f);
             dot.end();
         }
     }

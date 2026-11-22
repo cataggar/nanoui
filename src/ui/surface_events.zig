@@ -13,6 +13,7 @@ const drop = @import("surface_drop.zig");
 const link_pace = @import("surface_pacing.zig");
 const keys = @import("surface_keys.zig");
 const pointer_press = @import("pointer_press.zig");
+const surface_pen = @import("surface_pen.zig");
 
 pub const methods = [_]objc.Method{
     .{ .name = "isFlipped", .imp = &yes, .types = "c@:" },
@@ -43,6 +44,7 @@ pub const methods = [_]objc.Method{
     .{ .name = "viewDidChangeBackingProperties", .imp = &backingChanged, .types = "v@:" },
     .{ .name = "viewDidChangeEffectiveAppearance", .imp = &appearanceChanged, .types = "v@:" },
     .{ .name = "accessibilityChanged:", .imp = &accessibilityChanged, .types = "v@:@" },
+    .{ .name = "nanouiDisplayChanged:", .imp = &displayChanged, .types = "v@:@" },
     .{ .name = "updateTrackingAreas", .imp = &updateTrackingAreas, .types = "v@:" },
     .{ .name = "cursorUpdate:", .imp = &cursorUpdate, .types = "v@:@" },
     .{ .name = "resetCursorRects", .imp = &resetCursorRects, .types = "v@:" },
@@ -50,7 +52,7 @@ pub const methods = [_]objc.Method{
     .{ .name = "metalDisplayLink:needsUpdate:", .imp = &link_pace.metalDisplayLinkNeedsUpdate, .types = "v@:@@" },
     .{ .name = "viewWillStartLiveResize", .imp = &link_pace.liveResizeStart, .types = "v@:" },
     .{ .name = "viewDidEndLiveResize", .imp = &link_pace.liveResizeEnd, .types = "v@:" },
-} ++ keys.methods ++ textinput.methods ++ a11y.methods;
+} ++ keys.methods ++ textinput.methods ++ a11y.methods ++ surface_pen.methods;
 
 /// What drags from other apps may bring.
 pub const drag_types = [_][]const u8{ "public.url", "public.file-url", "public.utf8-plain-text" };
@@ -82,6 +84,7 @@ fn setMouse(s: *Surface, event: objc.Object) void {
     const p = objc.msg(objc.CGPoint, event, "locationInWindow", .{});
     s.ctx.input.mouse = s.toView(p);
     setMods(&s.ctx.input, objc.msg(objc.NSUInteger, event, "modifierFlags", .{}));
+    surface_pen.read(&s.ctx.input, event);
 }
 
 fn hitTest(obj: objc.Object, _: objc.SEL, point: objc.CGPoint) callconv(.c) ?objc.Object {
@@ -358,6 +361,13 @@ fn accessibilityChanged(obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(
     const ws = objc.msg(objc.Object, objc.class("NSWorkspace"), "sharedWorkspace", .{});
     s.reduce_motion = objc.msg(objc.BOOL, ws, "accessibilityDisplayShouldReduceMotion", .{});
     if (s.visible()) s.requestFrame() else s.frame();
+}
+
+/// Another screen, or a screen's parameters changed (`Surface.on_display_change`).
+fn displayChanged(obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) void {
+    const s = surfaceOf(obj) orelse return;
+    if (s.dead) return;
+    s.displayChanged();
 }
 
 fn updateTrackingAreas(obj: objc.Object, _: objc.SEL) callconv(.c) void {
