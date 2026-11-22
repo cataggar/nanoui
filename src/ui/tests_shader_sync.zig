@@ -26,6 +26,7 @@ const sources = [_]Source{
     .{ .name = "D3D11", .code = @embedFile("shader.hlsl") ++ "\n" ++ @embedFile("corner_sdf.hlsl"), .missing = &dither },
     .{ .name = "CPU", .code = @embedFile("raster.zig") ++ "\n" ++ @embedFile("raster_shapes.zig") },
     .{ .name = "WebGPU", .code = @embedFile("shader.wgsl") ++ "\n" ++ @embedFile("shader_shapes.wgsl") },
+    .{ .name = "WebGL2", .code = @embedFile("webgl2.glsl") ++ "\n" ++ @embedFile("webgl2_shapes.glsl") },
 };
 
 test "renderer corner and shadow coefficients stay in sync" {

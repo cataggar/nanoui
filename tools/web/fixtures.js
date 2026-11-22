@@ -1,12 +1,41 @@
 import { codecs } from "./codecs.js";
+
+function half(v) {
+  if (v === 0) return 0;
+  const exp = Math.floor(Math.log2(v));
+  return ((exp + 15) << 10) | Math.round((v / 2 ** exp - 1) * 1024);
+}
+
+function makeHalfGradient() {
+  const data = new Uint16Array(32 * 24 * 4);
+  for (let y = 0; y < 24; y++) {
+    for (let x = 0; x < 32; x++) {
+      data.set([half(x / 32), half(y / 24), half(0.5), half(1)], (y * 32 + x) * 4);
+    }
+  }
+  return data;
+}
+
 // Browser-only sources used to verify the app/device boundary.
 export function createFixtures(runtime) {
   let compute, computeGeneration, fills = 0;
+  const gradient = makeHalfGradient();
   return {
     get fills() { return fills; },
+    reset() { compute = null; computeGeneration = 0; fills = 0; },
     imports: {
       fill(encoder, texture) {
         const r = runtime(), device = r.device;
+        if (r.backend === "webgl2") {
+          const gl = device, texObj = r.gpu.objects.get(texture);
+          gl.activeTexture(gl.TEXTURE7);
+          gl.bindTexture(gl.TEXTURE_2D, texObj.glTex);
+          gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+          gl.pixelStorei(gl.UNPACK_ROW_LENGTH, 0);
+          gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 32, 24, gl.RGBA, gl.HALF_FLOAT, gradient);
+          fills++;
+          return;
+        }
         if (!compute || computeGeneration !== r.gpu.generation) {
           const module = device.createShaderModule({code:`
             @group(0) @binding(0) var dst: texture_storage_2d<rgba16float,write>;
@@ -25,14 +54,25 @@ export function createFixtures(runtime) {
     async setup(scene) {
       const r = runtime(), held = []; let texture = 0, external = 0, rgb = [128,128,128];
       if(scene===8 || scene===10 || scene===17 || scene===18){
-        const tex=r.device.createTexture({size:[32,24],format:'rgba16float',usage:GPUTextureUsage.TEXTURE_BINDING|GPUTextureUsage.COPY_DST|GPUTextureUsage.STORAGE_BINDING});
-        texture=r.gpu.objects.put(tex);held.push(()=>{r.gpu.objects.drop(texture);tex.destroy();});
-        if(scene===8 || scene===17 || scene===18){
-          // Each component is exactly representable as a half float.
-          const half=v=>{if(v===0)return 0;const exp=Math.floor(Math.log2(v));return ((exp+15)<<10)|Math.round((v/2**exp-1)*1024);};
-          const data=new Uint16Array(32*24*4);
-          for(let y=0;y<24;y++)for(let x=0;x<32;x++)data.set([half(x/32),half(y/24),half(0.5),half(1)],(y*32+x)*4);
-          r.device.queue.writeTexture({texture:tex},data,{bytesPerRow:32*8},[32,24]);
+        const initial = (scene===8 || scene===17 || scene===18) ? gradient : null;
+        if (r.backend === "webgl2") {
+          const gl = r.device, glTex = gl.createTexture();
+          gl.activeTexture(gl.TEXTURE7);
+          gl.bindTexture(gl.TEXTURE_2D, glTex);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+          gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+          gl.pixelStorei(gl.UNPACK_ROW_LENGTH, 0);
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, 32, 24, 0, gl.RGBA, gl.HALF_FLOAT, initial);
+          const wrapped = r.gpu.wrapTexture(glTex, { width: 32, height: 24, format: "rgba16float" });
+          texture = r.gpu.objects.put(wrapped);
+          held.push(() => { r.gpu.objects.drop(texture); wrapped.destroy?.(); if (!gl.isContextLost()) gl.deleteTexture(glTex); });
+        } else {
+          const tex=r.device.createTexture({size:[32,24],format:'rgba16float',usage:GPUTextureUsage.TEXTURE_BINDING|GPUTextureUsage.COPY_DST|GPUTextureUsage.STORAGE_BINDING});
+          texture=r.gpu.objects.put(tex);held.push(()=>{r.gpu.objects.drop(texture);tex.destroy();});
+          if (initial) r.device.queue.writeTexture({texture:tex},initial,{bytesPerRow:32*8},[32,24]);
         }
       }
       if(scene===9 || scene===11 || scene===12 || scene===14 || scene===15){

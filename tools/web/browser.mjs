@@ -2,8 +2,26 @@ import { chromium } from 'playwright';
 import assert from 'node:assert/strict';
 import { serve } from './serve.mjs';
 import { chromiumOptions } from './browser_options.mjs';
+import { runWebGL2AndInputSuite } from './browser_input.mjs';
 const host = await serve();
 const browser = await chromium.launch(chromiumOptions());
+const comparePage = async targetPage => {
+  const png = await targetPage.screenshot({scale:"device"});
+  return targetPage.evaluate(async(data)=>{
+    const r=window.nanoui, e=r.exports, canvas=document.querySelector('canvas');
+    await r.gpu.check();
+    const scratch=document.createElement('canvas');scratch.width=canvas.width;scratch.height=canvas.height;
+    const bitmap=await createImageBitmap(new Blob([Uint8Array.from(atob(data),c=>c.charCodeAt(0))],{type:'image/png'}));
+    const ctx=scratch.getContext('2d');ctx.drawImage(bitmap,0,0);bitmap.close();
+    const rgba=ctx.getImageData(0,0,canvas.width,canvas.height).data;
+    const ptr=e.nanoui_web_snapshot();
+    if(!ptr)throw Error('CPU snapshot failed');
+    const bgra=new Uint8Array(e.memory.buffer,ptr,rgba.length);
+    let sum=0,worst=0,off=0;
+    for(let i=0;i<rgba.length;i++){const c=i%4;const j=c===0?i+2:c===2?i-2:i;const d=Math.abs(rgba[i]-bgra[j]);sum+=d;worst=Math.max(worst,d);off+=Number(d>8);}
+    return {mean:sum/rgba.length,worst,off,width:canvas.width,height:canvas.height};
+  },png.toString("base64"));
+};
 try {
   const context = await browser.newContext({ viewport:{width:420,height:300}, deviceScaleFactor:2 });
   const page = await context.newPage();
@@ -19,22 +37,7 @@ try {
   });
   await page.goto(host.url+'/index.html');
   await page.waitForFunction(()=>window.nanoui?.exports.nanoui_web_frames()>1);
-  const compare = async () => {
-    const png = await page.screenshot({scale:"device"});
-    return page.evaluate(async(data)=>{
-    const r=window.nanoui, e=r.exports, canvas=document.querySelector('canvas');
-    await r.gpu.check();
-    const scratch=document.createElement('canvas');scratch.width=canvas.width;scratch.height=canvas.height;
-    const bitmap=await createImageBitmap(new Blob([Uint8Array.from(atob(data),c=>c.charCodeAt(0))],{type:'image/png'}));
-    const ctx=scratch.getContext('2d');ctx.drawImage(bitmap,0,0);bitmap.close();
-    const rgba=ctx.getImageData(0,0,canvas.width,canvas.height).data;
-    const ptr=e.nanoui_web_snapshot();
-    if(!ptr)throw Error('CPU snapshot failed');
-    const bgra=new Uint8Array(e.memory.buffer,ptr,rgba.length);
-    let sum=0,worst=0,off=0;
-    for(let i=0;i<rgba.length;i++){const c=i%4;const j=c===0?i+2:c===2?i-2:i;const d=Math.abs(rgba[i]-bgra[j]);sum+=d;worst=Math.max(worst,d);off+=Number(d>8);}
-    return {mean:sum/rgba.length,worst,off,width:canvas.width,height:canvas.height};
-  },png.toString("base64")); };
+  const compare = () => comparePage(page);
   { const result=await compare(); console.log(result); assert.ok(result.mean<0.05); }
   assert.equal(await page.evaluate(()=>Number(window.nanoui.exports.counter_value())),0);
   const scissors = await page.evaluate(()=>window.damageScissors);
@@ -106,12 +109,17 @@ try {
   await page.waitForTimeout(400);
   const workerBefore=await page.evaluate(()=>window.workerProbe.info());
   assert.equal(workerBefore.value,0);
-  await page.evaluate(()=>{
+  await page.evaluate(async () => {
     window.workerProbe.worker.postMessage({pointer:[0,207,185]});
     window.workerProbe.worker.postMessage({pointer:[1,207,185]});
     window.workerProbe.worker.postMessage({pointer:[2,207,185]});
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline) {
+      if ((await window.workerProbe.info()).value === 1) break;
+      await new Promise(r => setTimeout(r, 40));
+    }
   });
-  await page.waitForTimeout(600);
+  await page.waitForTimeout(800);
   const workerAfter=await page.evaluate(()=>window.workerProbe.info());assert.equal(workerAfter.value,1);
   await page.waitForTimeout(1000);
   assert.equal((await page.evaluate(()=>window.workerProbe.info())).callbacks,workerAfter.callbacks);
@@ -127,5 +135,6 @@ try {
   assert.deepEqual(dimensions,[420,300]);
   await low.evaluate(()=>window.nanoui.destroy());await scaleOne.close();
   assert.deepEqual(errors,[]);
-  console.log('PASS canvas, click, idle, resize/DPR, device loss, disposal, Worker input and idle');
+  await runWebGL2AndInputSuite(browser, host.url, comparePage);
+  console.log('PASS WebGPU + WebGL2 fallback, Worker, keyboard, EditContext/textarea IME, and clipboard');
 } finally { await browser.close(); await host.close(); }

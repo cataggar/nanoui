@@ -33,6 +33,7 @@ jobs:
       - run: zig build web-check -j1
       - run: node tools/web/check.mjs
       - run: zig test src/ui/tests_shader_sync.zig
+      - run: zig test src/web/utf16.zig
       - run: npm ci --ignore-scripts --prefix tools/web
       - run: tools/web/node_modules/.bin/playwright install --with-deps --only-shell chromium
       - run: zig build web-parity -j1

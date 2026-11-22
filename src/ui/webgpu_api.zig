@@ -16,6 +16,7 @@ comptime {
     assert(@sizeOf(LayoutEntry) == 12 and @sizeOf(BindEntry) == 20 and @sizeOf(PipelineDesc) == 20);
 }
 
+pub extern "nanoui_gpu" fn backend() u32;
 pub extern "nanoui_gpu" fn device() Handle;
 pub extern "nanoui_gpu" fn device_generation() u32;
 pub extern "nanoui_gpu" fn preferred_format() Format;

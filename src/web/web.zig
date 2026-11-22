@@ -12,11 +12,13 @@ pub const Target = webgpu.Target;
 pub extern "nanoui_web" fn request_frame() void;
 pub extern "nanoui_web" fn request_after(ms: f64) void;
 pub extern "nanoui_web" fn now_ms() f64;
+pub extern "nanoui_web" fn clipboard_write(ptr: [*]const u8, len: usize) void;
 extern "nanoui_web" fn run_forever() noreturn;
 
 pub var active: ?*Surface = null;
 comptime {
     _ = @import("exports.zig");
+    _ = @import("exports_input.zig");
 }
 
 /// Optional fallback fonts shipped with the web examples. Applications may
@@ -52,10 +54,29 @@ pub const Surface = struct {
     after_frame_ctx: ?*anyopaque = null,
     after_frame: ?*const fn (?*anyopaque, *Surface) bool = null,
     frame_count: u32 = 0,
-    key_text: [4]u8 = undefined,
-    text_op: [1]@import("../ui/input.zig").TextOp = undefined,
+    pending_chars: std.ArrayList(u8) = .empty,
+    pending_ops: std.ArrayList(ui.TextOp) = .empty,
+    op_strings: std.ArrayList([]u8) = .empty,
+    scratch: std.ArrayList(u8) = .empty,
+    pending_text: std.ArrayList(u8) = .empty,
+    pending_caret: usize = 0,
+    pending_anchor: usize = 0,
+    pending_marked: ?[2]usize = null,
+    pending_text_valid: bool = false,
+    clipboard_wrote: bool = false,
+    ime_state: [8]f32 = @splat(0),
     frame_log: ?ui.FrameLog = null,
     last_record: u32 = 0xffffffff,
+
+    pub fn clearPendingInput(s: *Surface) void {
+        for (s.op_strings.items) |str| s.gpa.free(str);
+        s.op_strings.clearRetainingCapacity();
+        s.pending_ops.clearRetainingCapacity();
+        s.pending_chars.clearRetainingCapacity();
+        s.pending_text.clearRetainingCapacity();
+        s.pending_marked = null;
+        s.pending_text_valid = false;
+    }
 
     pub fn recordFrames(s: *Surface, allocator: std.mem.Allocator) !*ui.FrameLog {
         if (s.frame_log == null) s.frame_log = try ui.FrameLog.init(allocator, null);
@@ -75,9 +96,12 @@ pub const Surface = struct {
         s.text.setScale(s.scale);
         s.dirty = false;
         s.ctx.frame_time = dt;
-        s.ctx.renderer = "WebGPU";
+        s.ctx.renderer = if (webgpu.api.backend() == 1) "WebGL2" else "WebGPU";
+        if (s.pending_chars.items.len > 0 and s.ctx.input.chars.len == 0) s.ctx.input.chars = s.pending_chars.items;
+        if (s.pending_ops.items.len > 0) s.ctx.input.ops = s.pending_ops.items;
         const theme = s.ctx.theme_chosen orelse s.theme;
         const result = frames.run(&s.ctx, s.view, &s.text, &s.instances, s.size, s.scale, theme, dt, time - s.start_time);
+        s.clearPendingInput();
         if (!std.meta.eql(theme, s.ctx.theme_chosen orelse s.theme)) s.dirty = true;
         const after_start = now_ms();
         if (s.after_frame) |f| if (f(s.after_frame_ctx, s)) {
@@ -130,6 +154,12 @@ pub const Surface = struct {
     pub fn deinit(s: *Surface) void {
         if (active == s) active = null;
         if (s.frame_log) |*log| log.deinit();
+        s.clearPendingInput();
+        s.op_strings.deinit(s.gpa);
+        s.pending_ops.deinit(s.gpa);
+        s.pending_chars.deinit(s.gpa);
+        s.pending_text.deinit(s.gpa);
+        s.scratch.deinit(s.gpa);
         s.renderer.deinit();
         s.instances.deinit(s.gpa);
         s.ctx.deinit();
@@ -158,9 +188,18 @@ pub fn mount(view: ui.View, options: Options) !*Surface {
     s.ctx = .init(s.gpa, &s.text);
     s.text.images.sink = .{ .ctx = &s.renderer, .upload = webgpu.Renderer.uploadImage };
     s.ctx.waker = .{ .ctx = s, .wake = wake };
+    s.ctx.clipboard = .{ .ctx = s, .write = writeClipboard };
     active = s;
     s.requestFrame();
     return s;
+}
+
+fn writeClipboard(ctx: ?*anyopaque, text_bytes: []const u8) void {
+    if (ctx) |p| {
+        const s: *Surface = @ptrCast(@alignCast(p));
+        s.clipboard_wrote = true;
+    }
+    clipboard_write(text_bytes.ptr, text_bytes.len);
 }
 
 fn wake(ctx: *anyopaque) void {

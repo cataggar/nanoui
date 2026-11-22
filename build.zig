@@ -503,7 +503,7 @@ fn addWebParity(b: *std.Build) void {
     exe.rdynamic = true;
     exe.wasi_exec_model = .reactor;
     step.dependOn(&b.addInstallArtifact(exe, .{ .dest_dir = .{ .override = .{ .custom = "web" } } }).step);
-    for ([_][]const u8{ "gpu.js", "gpu_timing.js", "external.js", "wasi.js", "nanoui.js", "host.js" }) |file| {
+    for ([_][]const u8{ "gpu.js", "gpu_timing.js", "webgl2.js", "webgl2_pass.js", "external.js", "wasi.js", "nanoui.js", "host.js", "input.js" }) |file| {
         step.dependOn(&b.addInstallFile(b.path(b.fmt("src/web/{s}", .{file})), b.fmt("web/{s}", .{file})).step);
     }
 }
@@ -522,7 +522,7 @@ fn addWebDemo(b: *std.Build) void {
         const exe = b.addExecutable(.{ .name = name, .root_module = root });
         step.dependOn(web.install(b, exe, b.path(".")));
     }
-    for ([_][]const u8{ "gpu.js", "gpu_timing.js", "external.js", "wasi.js", "nanoui.js", "host.js", "index.html", "worker.js" }) |file| {
+    for ([_][]const u8{ "gpu.js", "gpu_timing.js", "webgl2.js", "webgl2_pass.js", "external.js", "wasi.js", "nanoui.js", "host.js", "input.js", "index.html", "worker.js" }) |file| {
         step.dependOn(&b.addInstallFile(b.path(b.fmt("src/web/{s}", .{file})), b.fmt("web/{s}", .{file})).step);
     }
 }
