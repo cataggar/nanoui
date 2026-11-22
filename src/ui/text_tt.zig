@@ -27,6 +27,7 @@ const desktop = switch (builtin.os.tag) {
     .ios => @import("../ios/desktop.zig"),
     .windows => @import("../windows/desktop.zig"),
     .linux => if (builtin.abi.isAndroid()) @import("../android/desktop.zig") else @import("../linux/desktop.zig"),
+    .wasi => struct {},
     else => unreachable,
 };
 
@@ -54,7 +55,7 @@ pub const Line = struct { start: usize, end: usize, width: f32 };
 
 const FontKey = struct { size_bits: u32, weight: types.Weight, mono: bool, italic: bool, system: bool, family: u64, css_weight: u16, stretch: u16 };
 
-fn fontKey(style: types.TextStyle) FontKey {
+fn fontKey(style: *const types.TextStyle) FontKey {
     return .{
         .size_bits = @bitCast(style.size),
         .weight = style.weight,
@@ -103,7 +104,7 @@ pub const TextSystem = struct {
     /// Called only by live window surfaces. Testers and headless snapshots use
     /// plain `init`, so they never create or write a persistent font index.
     pub fn enablePersistence(self: *TextSystem, app_name: []const u8) void {
-        if (builtin.is_test) return;
+        if (builtin.is_test or builtin.os.tag == .wasi) return;
         const dir = desktop.path(self.gpa, .cache, app_name) catch return;
         defer self.gpa.free(dir);
         self.db.enableCache(dir);
@@ -212,7 +213,7 @@ pub const TextSystem = struct {
     /// The fonts of a style that names families; null when it names none that exist.
     pub fn stackOf(self: *TextSystem, style: types.TextStyle) ?*stacks.Stack {
         const list = style.family orelse return null;
-        const fk = fontKey(style);
+        const fk = fontKey(&style);
         if (self.stacks.get(fk)) |st| return st;
         const st = stacks.build(self, list, style);
         self.stacks.put(self.gpa, fk, st) catch {};
@@ -267,7 +268,7 @@ pub const TextSystem = struct {
     }
 
     pub fn font(self: *TextSystem, style: types.TextStyle) Font {
-        const fk = fontKey(style);
+        const fk = fontKey(&style);
         if (self.fonts.get(fk)) |f| return f;
         const weight = style.weightValue();
         const size = style.size * self.zoom;
@@ -297,23 +298,39 @@ pub const TextSystem = struct {
     }
 
     pub fn key(s: []const u8, style: types.TextStyle, extra: u64) u64 {
+        return keyPtr(s, &style, extra);
+    }
+
+    pub fn keyPtr(s: []const u8, style: *const types.TextStyle, extra: u64) u64 {
         var h = std.hash.Wyhash.init(extra);
         h.update(s);
-        h.update(std.mem.asBytes(&style.size));
-        h.update(std.mem.asBytes(&style.mono_scale));
-        h.update(&.{ @backingInt(style.weight), @intFromBool(style.mono), @intFromBool(style.italic), @intFromBool(style.system_font), @intFromBool(style.tabular) });
-        h.update(std.mem.asBytes(&style.tracking));
-        if (style.family) |f| h.update(f);
-        h.update(std.mem.asBytes(&style.css_weight));
-        h.update(std.mem.asBytes(&style.stretch));
+        var buf: [21]u8 = undefined;
+        buf[0..4].* = std.mem.asBytes(&style.size).*;
+        buf[4..8].* = std.mem.asBytes(&style.mono_scale).*;
+        buf[8] = @backingInt(style.weight);
+        buf[9] = @intFromBool(style.mono);
+        buf[10] = @intFromBool(style.italic);
+        buf[11] = @intFromBool(style.system_font);
+        buf[12] = @intFromBool(style.tabular);
+        buf[13..17].* = std.mem.asBytes(&style.tracking).*;
+        buf[17..19].* = std.mem.asBytes(&style.css_weight).*;
+        buf[19..21].* = std.mem.asBytes(&style.stretch).*;
+        if (style.family) |f| {
+            h.update(buf[0..17]);
+            h.update(f);
+            h.update(buf[17..21]);
+        } else {
+            h.update(&buf);
+        }
         return h.final();
     }
 
     pub fn layout(self: *TextSystem, s: []const u8, style: types.TextStyle) Layout {
         if (s.len == 0) return .{ .width = 0, .glyphs = &.{} };
-        const k = key(s, style, 1);
+        const k = keyPtr(s, &style, 1);
         if (self.cached(k)) |l| return l;
         var glyphs: std.ArrayList(Glyph) = .empty;
+        glyphs.ensureTotalCapacity(self.gpa, s.len) catch {};
         var w = self.shapeInto(&glyphs, s, style, 0, 0) catch {
             glyphs.deinit(self.gpa);
             return .{ .width = 0, .glyphs = &.{} };
@@ -347,6 +364,8 @@ pub const TextSystem = struct {
         var x = x0;
         if (f.id == 0xffff) return x + @as(f32, @floatFromInt(s.len)) * size * 0.5;
         const primary = self.run_fonts.items[f.id];
+        const primary_k = size / primary.font.units_per_em;
+        const primary_grid = self.gridded(f.id, primary);
         const stack = self.stackOf(style);
         var prev: ?struct { id: u16, g: u16, digit: bool } = null;
         var i: usize = 0;
@@ -374,8 +393,8 @@ pub const TextSystem = struct {
                     }
                 }
             }
-            const k = size / rf.font.units_per_em;
-            const grid = self.gridded(id, rf);
+            const k = if (id == f.id) primary_k else size / rf.font.units_per_em;
+            const grid = if (id == f.id) primary_grid else self.gridded(id, rf);
             // Tabular digits: each in a cell as wide as the widest, unkerned.
             const digit = style.tabular and cp >= '0' and cp <= '9';
             if (prev) |p| if (p.id == id and !digit and !p.digit) {
@@ -440,7 +459,7 @@ pub const TextSystem = struct {
     /// characters) and at newlines into lines no wider than `max_width`.
     pub fn wrapAttributed(self: *TextSystem, s: []const u8, style: types.TextStyle, spans: []const types.Span, max_width: f32) []const Line {
         const styled = rich.styled(spans);
-        const k = key(s, style, (@as(u64, @intFromFloat(@max(0, @min(max_width, 1e6)))) + 2) ^ (if (styled) rich.spansHash(spans, 0, s.len) else 0));
+        const k = keyPtr(s, &style, (@as(u64, @intFromFloat(@max(0, @min(max_width, 1e6)))) + 2) ^ (if (styled) rich.spansHash(spans, 0, s.len) else 0));
         if (self.wraps.get(self.gpa, k)) |lines| return lines;
         const lay = if (styled) rich.layout(self, s, style, spans, 0) else self.layout(s, style);
         var lines: std.ArrayList(Line) = .empty;

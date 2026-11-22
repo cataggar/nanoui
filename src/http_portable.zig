@@ -191,6 +191,7 @@ pub fn fetch(gpa: std.mem.Allocator, req: http.Request, answer: *http.Answer, ct
         answer.err = "nanoui.http: no main loop to answer on";
         return post(ctx, deliver);
     }
+    if (builtin.single_threaded) return work(job);
     const t = std.Thread.spawn(.{}, work, .{job}) catch {
         job.deinit();
         answer.err = "nanoui.http: no thread for the request";
@@ -330,8 +331,8 @@ fn sent(job: *const Job, i: usize, hop: Hop) bool {
     return !std.mem.eql(u8, job.names[i], "authorization") and !std.mem.eql(u8, job.names[i], "cookie");
 }
 
-/// Linux, Windows and Android: Apple's systems come here only in this file's tests.
-const has_tls = builtin.os.tag != .macos and builtin.os.tag != .ios;
+/// Linux, Windows and Android: Apple's systems and WASI come here only without http_zig.
+const has_tls = builtin.os.tag != .macos and builtin.os.tag != .ios and builtin.os.tag != .wasi;
 
 fn sendTls(io: Io, job: *Job, hop: Hop) anyerror!void {
     if (!has_tls) return error.UnsupportedScheme;
@@ -469,6 +470,7 @@ const TestServer = struct {
 };
 
 test "plain HTTP follows redirects and keeps the last answer's headers" {
+    if (builtin.os.tag == .wasi or builtin.single_threaded) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();

@@ -11,7 +11,7 @@ const frameworks = [_][]const u8{ "AppKit", "WebKit", "Metal", "QuartzCore", "Co
 const ios_frameworks = [_][]const u8{ "UIKit", "CoreLocation", "MapKit", "Metal", "QuartzCore", "CoreText", "CoreGraphics", "CoreFoundation", "Foundation", "ImageIO", "UniformTypeIdentifiers", "CoreVideo" };
 
 pub fn build(b: *std.Build) void {
-    const target = b.standardTargetOptions(.{});
+    const raw_target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
     const portable = b.option(bool, "portable", "Use portable text and CPU rendering instead of native rasterization (for tests)") orelse false;
     // `-Dllvm=false -Dnew-linker=false`: built as zorg builds apps (the
@@ -20,8 +20,12 @@ pub fn build(b: *std.Build) void {
     // the default gets the new MachO linker, which cannot load objects yet.
     const use_llvm = b.option(bool, "llvm", "Build the tests and the runtime library with the LLVM backend (false = self-hosted)");
     const new_linker = b.option(bool, "new-linker", "Link the tests and the runtime library with Zig's new linker");
+    const enable_simd128 = web.simd128Option(b, use_llvm);
+    const target = web.adjustTarget(b, raw_target, enable_simd128);
+    const os = target.result.os.tag;
+    const is_wasi = os == .wasi;
     const options = b.addOptions();
-    options.addOption(bool, "portable", portable);
+    options.addOption(bool, "portable", portable or is_wasi);
     options.addOption(bool, "in_rt", false);
     // The one place the version is kept: build.zig.zon (tools/version.sh).
     options.addOption([]const u8, "version", @import("build.zig.zon").version);
@@ -30,13 +34,11 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/nanoui.zig"),
         .target = target,
         .optimize = optimize,
+        .single_threaded = if (is_wasi) true else null,
         .link_libc = true,
     });
     nanoui.addOptions("build_options", options);
-    addWebCheck(b);
-    addWebParity(b);
-    addWebDemo(b);
-    const os = target.result.os.tag;
+    web.addSteps(b, @import("build.zig.zon").version, use_llvm, enable_simd128);
     if (os == .macos) {
         const rt_options = b.addOptions();
         rt_options.addOption(bool, "portable", portable);
@@ -125,7 +127,7 @@ pub fn build(b: *std.Build) void {
     }
     // Elsewhere GTK is loaded when the app starts (dlopen): nothing to link.
     // HTTP there is http-zig's (nanoui.http), fetched only for those targets.
-    if (os != .macos and os != .ios) {
+    if (os != .macos and os != .ios and !is_wasi) {
         if (b.lazyDependency("http_zig", .{ .target = target, .optimize = optimize })) |d| nanoui.addImport("http_zig", d.module("http_zig"));
     }
 
@@ -139,12 +141,13 @@ pub fn build(b: *std.Build) void {
         .imports = &.{.{ .name = "build_options", .module = nui_options.createModule() }},
     }) });
     // A command for desktops: not part of a phone's build.
-    if (os != .ios and !target.result.abi.isAndroid()) b.installArtifact(nui);
+    if (os != .ios and !is_wasi and !target.result.abi.isAndroid()) b.installArtifact(nui);
     b.step("nui", "Build zig-out/bin/nui").dependOn(&b.addInstallArtifact(nui, .{}).step);
     const nui_tests = b.addTest(.{ .root_module = nui.root_module });
     b.step("test-nui", "Test nui").dependOn(&b.addRunArtifact(nui_tests).step);
 
     for (examples) |name| {
+        if (is_wasi) break;
         // Pages (the hello and browser examples) need a webview: WKWebView on
         // macOS and iOS, WebView2 on Windows, WebKitGTK on Linux.
         const has_pages = os == .macos or os == .ios or os == .windows or (os == .linux and !target.result.abi.isAndroid());
@@ -216,29 +219,49 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&b.addRunArtifact(tests).step);
     // The accessibility demo, as VoiceOver reads it.
-    if (!target.result.abi.isAndroid()) test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = b.createModule(.{
-        .root_source_file = b.path("examples/access/main.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{.{ .name = "nanoui", .module = nanoui }},
-    }) })).step);
+    if (!target.result.abi.isAndroid()) {
+        const access_tests = b.addTest(.{
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("examples/access/main.zig"),
+                .target = target,
+                .optimize = optimize,
+                .single_threaded = if (is_wasi) true else null,
+                .imports = &.{.{ .name = "nanoui", .module = nanoui }},
+            }),
+            .use_llvm = use_llvm,
+        });
+        access_tests.use_new_linker = new_linker;
+        test_step.dependOn(&b.addRunArtifact(access_tests).step);
+    }
     // The gallery's pages, command palette, dock studio, and phone layout.
-    if (!target.result.abi.isAndroid()) test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = b.createModule(.{
-        .root_source_file = b.path("examples/gallery/tests.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{.{ .name = "nanoui", .module = nanoui }},
-    }) })).step);
+    if (!target.result.abi.isAndroid() and !is_wasi) {
+        const gallery_tests = b.addTest(.{
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("examples/gallery/tests.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{.{ .name = "nanoui", .module = nanoui }},
+            }),
+            .use_llvm = use_llvm,
+        });
+        gallery_tests.use_new_linker = new_linker;
+        test_step.dependOn(&b.addRunArtifact(gallery_tests).step);
+    }
     // The SG bus example's planner, on its real stop lists (prints what it plans).
-    const sg_tests = b.addTest(.{ .root_module = b.createModule(.{
-        .root_source_file = b.path("examples/sgbus/tests.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{.{ .name = "nanoui", .module = nanoui }},
-    }) });
+    const sg_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/sgbus/tests.zig"),
+            .target = target,
+            .optimize = optimize,
+            .single_threaded = if (is_wasi) true else null,
+            .imports = &.{.{ .name = "nanoui", .module = nanoui }},
+        }),
+        .use_llvm = use_llvm,
+    });
+    sg_tests.use_new_linker = new_linker;
     b.step("test-sgbus", "Test the SG bus example's journey planner").dependOn(&b.addRunArtifact(sg_tests).step);
-    // The tests as a program, for another machine (Linux in a container).
-    const test_bin = b.addInstallArtifact(tests, .{ .dest_sub_path = if (os == .windows) "nanoui-tests.exe" else "nanoui-tests" });
+    // The tests as a program, for another machine (Linux in a container, WASI in Wasmtime).
+    const test_bin = b.addInstallArtifact(tests, .{ .dest_sub_path = if (os == .windows) "nanoui-tests.exe" else if (is_wasi) "nanoui-tests.wasm" else "nanoui-tests" });
     b.step("test-bin", "Install the unit tests as zig-out/bin/nanoui-tests").dependOn(&test_bin.step);
 
     // The Android tools' own tests (zip writing, versions, the manifest), on this machine.
@@ -422,107 +445,4 @@ fn hasLoader(b: *std.Build, dir: []const u8) bool {
     defer d.close(b.graph.io);
     _ = d.statFile(b.graph.io, "WebView2Loader.dll", .{}) catch return false;
     return true;
-}
-
-fn addWebCheck(b: *std.Build) void {
-    const step = b.step("web-check", "Compile the single-threaded wasm32-wasi UI probe (Debug and ReleaseSmall)");
-    const target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .wasi });
-    const options = b.addOptions();
-    options.addOption(bool, "portable", true);
-    options.addOption(bool, "in_rt", false);
-    options.addOption([]const u8, "version", @import("build.zig.zon").version);
-    var previous: ?*std.Build.Step = null;
-    for ([_]std.builtin.OptimizeMode{ .Debug, .ReleaseSmall }) |mode| {
-        const core = b.createModule(.{
-            .root_source_file = b.path("src/nanoui.zig"),
-            .target = target,
-            .optimize = mode,
-            .single_threaded = true,
-            .link_libc = true,
-        });
-        core.addOptions("build_options", options);
-        const probe = b.addExecutable(.{
-            .name = b.fmt("nanoui-web-check-{s}", .{@tagName(mode)}),
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("tools/web/check.zig"),
-                .target = target,
-                .optimize = mode,
-                .single_threaded = true,
-                .imports = &.{.{ .name = "nanoui", .module = core }},
-            }),
-        });
-        probe.entry = .disabled;
-        probe.rdynamic = true;
-        probe.wasi_exec_model = .reactor;
-        if (previous) |prev| probe.step.dependOn(prev);
-        previous = &probe.step;
-        step.dependOn(&b.addInstallArtifact(probe, .{ .dest_dir = .{ .override = .{ .custom = "web" } } }).step);
-        const demo_root = b.createModule(.{
-            .root_source_file = b.path("examples/counter/main.zig"),
-            .target = target,
-            .optimize = mode,
-            .single_threaded = true,
-            .imports = &.{.{ .name = "nanoui", .module = core }},
-        });
-        const demo = b.addExecutable(.{ .name = b.fmt("counter-check-{s}", .{@tagName(mode)}), .root_module = demo_root });
-        demo.rdynamic = true;
-        demo.step.dependOn(&probe.step);
-        previous = &demo.step;
-        step.dependOn(&demo.step);
-        const parity_root = b.createModule(.{ .root_source_file = b.path("src/web_parity.zig"), .target = target, .optimize = mode, .single_threaded = true, .link_libc = true });
-        parity_root.addOptions("build_options", options);
-        const parity = b.addExecutable(.{ .name = b.fmt("parity-check-{s}", .{@tagName(mode)}), .root_module = parity_root });
-        parity.entry = .disabled;
-        parity.rdynamic = true;
-        parity.wasi_exec_model = .reactor;
-        parity.step.dependOn(&demo.step);
-        previous = &parity.step;
-        step.dependOn(&parity.step);
-    }
-}
-
-fn addWebParity(b: *std.Build) void {
-    const step = b.step("web-parity", "Build the browser WebGPU/CPU parity reactor and JavaScript host");
-    const target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .wasi });
-    const root = b.createModule(.{
-        .root_source_file = b.path("src/web_parity.zig"),
-        .target = target,
-        .optimize = .ReleaseSmall,
-        .single_threaded = true,
-        .link_libc = true,
-    });
-    const options = b.addOptions();
-    options.addOption(bool, "portable", true);
-    options.addOption(bool, "in_rt", false);
-    options.addOption([]const u8, "version", @import("build.zig.zon").version);
-    root.addOptions("build_options", options);
-    step.dependOn(&b.addInstallFile(b.path("tools/web/fixtures.js"), "web/fixtures.js").step);
-    step.dependOn(&b.addInstallFile(b.path("tools/web/codecs.js"), "web/codecs.js").step);
-    const exe = b.addExecutable(.{ .name = "nanoui-web-parity", .root_module = root });
-    exe.entry = .disabled;
-    exe.rdynamic = true;
-    exe.wasi_exec_model = .reactor;
-    step.dependOn(&b.addInstallArtifact(exe, .{ .dest_dir = .{ .override = .{ .custom = "web" } } }).step);
-    for ([_][]const u8{ "gpu.js", "gpu_timing.js", "webgl2.js", "webgl2_pass.js", "external.js", "wasi.js", "nanoui.js", "host.js", "input.js" }) |file| {
-        step.dependOn(&b.addInstallFile(b.path(b.fmt("src/web/{s}", .{file})), b.fmt("web/{s}", .{file})).step);
-    }
-}
-
-fn addWebDemo(b: *std.Build) void {
-    const step = b.step("web-demo", "Build the counter canvas demo");
-    const target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .wasi });
-    const core = b.createModule(.{ .root_source_file = b.path("src/nanoui.zig"), .target = target, .optimize = .ReleaseSmall, .single_threaded = true, .link_libc = true });
-    const options = b.addOptions();
-    options.addOption(bool, "portable", true);
-    options.addOption(bool, "in_rt", false);
-    options.addOption([]const u8, "version", @import("build.zig.zon").version);
-    core.addOptions("build_options", options);
-    for ([_][]const u8{ "counter", "gallery" }) |name| {
-        const root = b.createModule(.{ .root_source_file = b.path(b.fmt("examples/{s}/main.zig", .{name})), .target = target, .optimize = .ReleaseSmall, .single_threaded = true, .imports = &.{.{ .name = "nanoui", .module = core }} });
-        const exe = b.addExecutable(.{ .name = name, .root_module = root });
-        step.dependOn(web.install(b, exe, b.path(".")));
-    }
-    for ([_][]const u8{ "gpu.js", "gpu_timing.js", "webgl2.js", "webgl2_pass.js", "external.js", "wasi.js", "nanoui.js", "host.js", "input.js", "index.html", "worker.js" }) |file| {
-        step.dependOn(&b.addInstallFile(b.path(b.fmt("src/web/{s}", .{file})), b.fmt("web/{s}", .{file})).step);
-    }
 }

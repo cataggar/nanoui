@@ -130,9 +130,9 @@ test "scripts click at points, press combinations and write frames as they go" {
     var dir = testing.tmpDir(.{});
     defer dir.cleanup();
     var buf: [512]u8 = undefined;
-    const real = try dir.dir.realPathFile(std.testing.io, ".", &buf);
+    const real = try @import("../temp_path.zig").tmpDirPath(&dir, std.testing.io, &buf);
     var script_buf: [700]u8 = undefined;
-    const script = try std.fmt.bufPrint(&script_buf, "at:20,20;chord:cmd+n;snap:{s}/one.png;hover:90,90;at:80,80", .{buf[0..real]});
+    const script = try std.fmt.bufPrint(&script_buf, "at:20,20;chord:cmd+n;snap:{s}/one.png;hover:90,90;at:80,80", .{real});
     try t.runScript(script);
     try testing.expectEqual(@as(i32, 1), p.n);
     try testing.expectEqual(@as(i32, 1), p.news);

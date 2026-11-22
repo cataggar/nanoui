@@ -62,8 +62,10 @@ lib fixed (`tools/ios/zig-lib.sh`), Android the Android SDK and NDK.
   `Surface`'s ticks and wakes carry its id, not the surface
   (`surface_wake.find`); those still queued when the app stops never run,
   and `App.destroy` frees what they would have (`surface_wake.sweep`).
-- **Heavy builds:** never build with Zig's self-hosted backend
-  (`-fno-llvm`/`-fno-lld`); one heavy build at a time.
+- **Heavy builds:** never build native desktop or mobile targets with Zig's
+  self-hosted backend (`-fno-llvm`/`-fno-lld`); one heavy build at a time.
+  For `wasm32-wasi`, `wazig` (`-fno-llvm` + `+simd128` via `tools/wazig/build.py`)
+  is supported alongside standard `zig` (`-fllvm`).
 
 ## Layout
 
@@ -159,6 +161,8 @@ src/kit/              nanoui.kit: components after GPUI Kit (buttons, overlays, 
 tools/*.Dockerfile    Linux (GTK, Xvfb) and Windows (Wine) test images
 tools/ios/            app bundles (bundle.zig, finish.sh, check-bundle.sh), the Simulator (sim.sh), Zig's lib fixed (zig-lib.sh)
 tools/android/        APKs (apk.zig: the SDK, the manifest, aapt2, pack.zig, apksigner), run.sh, emulator.sh
+tools/web/            wasm32-wasi (+simd128) build helpers, WebGPU/WebGL2 parity & browser tests, headless bench
+tools/wazig/          LLVM-free wazig + Wasmtime build and test driver (json.zig, configurer.zig, build.py)
 examples/             hello (webview), counter and gallery (native UI), browser (local and remote pages)
 hillclimb/            headless benchmarks against mygo (its own package)
 apps/nanoterm/        the first app: a Warp-like terminal with ACP agents
@@ -194,6 +198,7 @@ zig build run-gallery -Dtarget=aarch64-linux-android   # the gallery on it (or a
 zig build test-bin -Dtarget=aarch64-linux-android --prefix zig-out/android-tests   # the tests for a device:
 adb push zig-out/android-tests/bin/nanoui-tests /data/local/tmp && adb shell /data/local/tmp/nanoui-tests
 zig build test-tools      # the Android build tools' own tests (zip writing, the manifest)
+python3 tools/wazig/build.py web-check web-parity web-demo test   # LLVM-free Wasm (+simd128) build & Wasmtime tests
 sh tools/version.sh 0.2.1 # set the version; commit, push tag v0.2.1 to release
 cd hillclimb && zig build run -- --label "change"   # climb: compare with mygo and history
 cd apps/nanomon && zig build test --fork=../..     # an app (a submodule) against this nanoui, not its pinned one

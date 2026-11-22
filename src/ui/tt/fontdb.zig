@@ -250,6 +250,7 @@ pub const Db = struct {
                 for ([_][]const u8{ "/System/Library/Fonts", "/Library/Fonts" }) |d| db.scanDir(d);
                 if (env("HOME")) |home| db.scanDir(std.fmt.bufPrint(&buf, "{s}/Library/Fonts", .{home}) catch return);
             },
+            .wasi => if (builtin.is_test) db.scanDir("src/ui/web_fonts"),
             else => if (android) {
                 for ([_][]const u8{ "/system/fonts", "/product/fonts" }) |d| db.scanDir(d);
             } else {

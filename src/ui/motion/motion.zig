@@ -84,14 +84,22 @@ pub const Target = struct {
     /// `base` with what `patch` sets put over it.
     pub fn overlay(base: Target, patch: Target) Target {
         var t = base;
-        inline for (@typeInfo(Target).@"struct".field_names) |name| {
-            if (@field(patch, name)) |v| @field(t, name) = v;
-        }
+        overlayInPlace(&t, &patch);
         return t;
+    }
+
+    pub fn overlayInPlace(t: *Target, patch: *const Target) void {
+        inline for (@typeInfo(Target).@"struct".field_names) |name| {
+            if (@field(patch.*, name)) |v| @field(t.*, name) = v;
+        }
     }
 
     /// Channel `i`'s value, if the target sets it.
     pub fn get(t: Target, i: usize) ?f32 {
+        return getPtr(&t, i);
+    }
+
+    pub fn getPtr(t: *const Target, i: usize) ?f32 {
         return switch (i) {
             0 => t.x,
             1 => t.y,
@@ -156,6 +164,10 @@ pub const Frame = struct {
     layout: u64 = 0,
 
     pub fn apply(f: Frame, s: *types.Style) void {
+        applyPtr(&f, s);
+    }
+
+    pub fn applyPtr(f: *const Frame, s: *types.Style) void {
         s.offset.x += f.x;
         s.offset.y += f.y;
         s.scale *= f.scale;
@@ -174,10 +186,10 @@ pub const Frame = struct {
 /// before the box (use `ui.key` first for a list's items).
 pub fn frame(c: *Context, m: Motion) Frame {
     const id = c.peekId(null);
-    const got = c.motion_store.get(c.gpa, id, c.frame) orelse return still(m.target);
+    const got = c.motion_store.get(c.gpa, id, c.frame) orelse return still(&m.target);
     const s = got.state;
     if (got.fresh) s.mounted = true;
-    return step(c, s, id, m, if (got.fresh) m.initial else null, false);
+    return step(c, s, id, &m, if (got.fresh and m.initial != null) &m.initial.? else null, false);
 }
 
 /// Presence: the next box (keyed `key`) while `show`, entering from
@@ -191,14 +203,14 @@ pub fn present(c: *Context, key: []const u8, show: bool, m: Motion) ?Frame {
         c.next_key = null;
         return null;
     }
-    const got = c.motion_store.get(c.gpa, id, c.frame) orelse return if (show) still(m.target) else null;
+    const got = c.motion_store.get(c.gpa, id, c.frame) orelse return if (show) still(&m.target) else null;
     const s = got.state;
     const entering = !s.mounted;
     if (show) {
         s.mounted = true;
         s.exiting = false;
     } else s.exiting = true;
-    const f = step(c, s, id, m, if (entering) m.initial else null, s.exiting);
+    const f = step(c, s, id, &m, if (entering and m.initial != null) &m.initial.? else null, s.exiting);
     if (s.exiting and !f.animating) {
         // Gone: next time it's shown it enters again.
         s.* = .{};
@@ -235,9 +247,9 @@ pub fn scoped(c: *Context, key: []const u8) u64 {
 }
 
 /// The target as it stands, without motion (when memory runs out).
-fn still(t: Target) Frame {
+fn still(t: *const Target) Frame {
     var f: Frame = .{};
-    for (0..store.channels) |i| if (t.get(i)) |v| setChannel(&f, i, v);
+    for (0..store.channels) |i| if (t.getPtr(i)) |v| setChannel(&f, i, v);
     return f;
 }
 
@@ -268,18 +280,18 @@ pub fn setChannel(f: *Frame, i: usize, v: f32) void {
 }
 
 /// Moves `s` toward what `m` asks now and reads it out.
-fn step(c: *Context, s: *State, id: u64, m: Motion, initial: ?Target, leaving: bool) Frame {
+fn step(c: *Context, s: *State, id: u64, m: *const Motion, initial: ?*const Target, leaving: bool) Frame {
     var goal = m.target;
     if (leaving) {
-        if (m.exit) |e| goal = goal.overlay(e);
+        if (m.exit) |*e| Target.overlayInPlace(&goal, e);
     } else {
         // Over it, or over something in it; pressing it alone.
         const over = c.hot == id or std.mem.indexOfScalar(u64, c.hot_path.items, id) != null;
-        if (m.hover) |h| if (over) {
-            goal = goal.overlay(h);
+        if (m.hover) |*h| if (over) {
+            Target.overlayInPlace(&goal, h);
         };
-        if (m.press) |p| if (c.active == id) {
-            goal = goal.overlay(p);
+        if (m.press) |*p| if (c.active == id) {
+            Target.overlayInPlace(&goal, p);
         };
     }
     const tr: Transition = if (c.reduced_motion or c.reduce_motion) .instant else m.transition;
@@ -288,10 +300,10 @@ fn step(c: *Context, s: *State, id: u64, m: Motion, initial: ?Target, leaving: b
     for (0..store.channels) |i| {
         const bit = @as(u16, 1) << @intCast(i);
         const ch = &s.ch[i];
-        const entry: ?f32 = if (initial) |t| t.get(i) else null;
+        const entry: ?f32 = if (initial) |t| t.getPtr(i) else null;
         const known = s.has & bit != 0;
         // Named now; else back to rest once it has moved, or from `initial`.
-        const target = goal.get(i) orelse if (known or entry != null)
+        const target = goal.getPtr(i) orelse if (known or entry != null)
             rest(i) orelse entry orelse @as(f32, @floatCast(ch.target))
         else
             continue;

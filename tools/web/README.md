@@ -1,8 +1,10 @@
 # WebGPU and WebGL2 target
 
 The browser renderer and minimal canvas host build for single-threaded
-`wasm32-wasi` with Zig 0.17. WebGPU is preferred when available, with an
-automatic non-destructive fallback to WebGL2 (`#version 300 es`).
+`wasm32-wasi` (`+simd128`, `+bulk_memory`, `+nontrapping_fptoint`, `-atomics`)
+with Zig 0.17 (`zig` with LLVM or `wazig` with `-fno-llvm`). WebGPU is
+preferred when available, with an automatic non-destructive fallback to
+WebGL2 (`#version 300 es`).
 
 The renderer consumes the current **192-byte** `gpu.Instance`, including
 subtree matrices, and respects `Texture.encoding` (`auto`, `display_sdr`,
@@ -22,6 +24,10 @@ node tools/web/parity.mjs
 zig build web-demo -j1
 node tools/web/browser.mjs
 node tools/web/serve.mjs
+
+# Fast LLVM-free Wasm builds, unit/widget tests, and headless benchmarks with wazig + Wasmtime:
+python3 tools/wazig/build.py web-check web-parity web-demo web-bench test --summary
+python3 tools/wazig/build.py run-web-bench -- --frames=60 --warmup=15
 ```
 
 Open the printed loopback URL with `/index.html` (counter) or

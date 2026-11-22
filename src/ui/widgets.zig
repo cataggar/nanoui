@@ -21,15 +21,13 @@ pub fn keyInt(c: *Context, n: u64) void {
 }
 
 pub fn column(c: *Context, style: Style) void {
-    var s = style;
-    s.direction = .column;
-    _ = c.open(s, null);
+    const i = c.openPtr(&style, null);
+    c.node(i).style.direction = .column;
 }
 
 pub fn row(c: *Context, style: Style) void {
-    var s = style;
-    s.direction = .row;
-    _ = c.open(s, null);
+    const i = c.openPtr(&style, null);
+    c.node(i).style.direction = .row;
 }
 
 /// Closes the box `column`, `row`, `card`, `scroll` or `pressable` opened.
@@ -40,7 +38,7 @@ pub fn end(c: *Context) void {
 /// A box that reports the pointer: open it, read the interaction, add
 /// children, then `end`. `hover` replaces the background while hovered.
 pub fn pressable(c: *Context, style: Style, hover: ?Color) Interaction {
-    const i = c.open(style, null);
+    const i = c.openPtr(&style, null);
     const it = c.interact(i, .{});
     if (hover) |h| {
         const t = c.animate(it.id, 0, if (it.hovered) 1 else 0, 18);
@@ -52,29 +50,36 @@ pub fn pressable(c: *Context, style: Style, hover: ?Color) Interaction {
 
 /// A surface for grouping: background, rounded corners, a soft shadow.
 pub fn card(c: *Context, style: Style) void {
-    var s = style;
+    const i = c.openPtr(&style, null);
+    const s = &c.node(i).style;
     if (s.background == null) s.background = c.theme.surface;
     if (s.radius == 0) s.radius = 12;
     if (s.shadow == null) s.shadow = .{ .color = c.theme.shadow, .blur = 16, .y = 4 };
     if (std.meta.eql(s.padding, types.Edges{})) s.padding = .all(16);
-    _ = c.open(s, null);
 }
 
 /// A box whose children scroll vertically.
 pub fn scroll(c: *Context, style: Style) void {
-    var s = style;
+    const i = c.openPtr(&style, null);
+    const s = &c.node(i).style;
     s.scroll = true;
     s.direction = .column;
-    _ = c.open(s, null);
 }
+
+const spacer_style: Style = .{ .grow = 1 };
+const empty_widget_content: ctx_mod.Content = .none;
 
 /// Takes the free room along its parent's main axis.
 pub fn spacer(c: *Context) void {
-    _ = c.leaf(.{ .grow = 1 }, .none, null);
+    _ = c.leafPtr(&spacer_style, &empty_widget_content, null);
 }
 
 pub fn divider(c: *Context) void {
-    _ = c.leaf(.{ .width = .fill, .height = .{ .px = 1 }, .background = c.theme.border }, .none, null);
+    const i = c.leafPtr(&Context.default_style, &empty_widget_content, null);
+    const s = &c.node(i).style;
+    s.width = .fill;
+    s.height = .{ .px = 1 };
+    s.background = c.theme.border;
 }
 
 /// `str` is copied into the frame, which lays it out after the view
@@ -101,8 +106,9 @@ pub fn textf(c: *Context, style: types.TextStyle, comptime fmt: []const u8, args
 
 fn textNode(c: *Context, str: []const u8, spans: []const types.Span, style: types.TextStyle) void {
     const color = style.color orelse c.theme.text;
-    const width: types.Length = if (style.wrap) .fill else .auto;
-    _ = c.leaf(.{ .width = width }, .{ .text = .{ .str = str, .style = style, .color = color, .spans = spans } }, null);
+    const ct: ctx_mod.Content = .{ .text = .{ .str = str, .style = style, .color = color, .spans = spans } };
+    const i = c.leafPtr(&Context.default_style, &ct, null);
+    if (style.wrap) c.node(i).style.width = .fill;
 }
 
 pub const IconOptions = struct {

@@ -151,7 +151,7 @@ pub fn applyScroll(c: *Context, dy: f32) bool {
 
 /// Resolves vertical scroll and rubber-band overscroll for box `n` in `layout.arrange`.
 pub fn arrangeScrollY(c: *Context, n: *const ctx_mod.Node, inner_main: f32, used: f32) f32 {
-    const st = n.style;
+    const st = &n.style;
     const max_scroll = @max(0, used - inner_main);
     if (st.follow_end) {
         const prev_max = c.scroll_max.get(n.id) orelse 0;
@@ -246,8 +246,8 @@ pub fn updateScrollbarDrag(c: *Context) void {
     scrubTo(c, d.id, g, c.input.mouse.y - d.grab_dy);
 }
 
-pub fn paintScrollbars(c: *Context, out: *std.ArrayList(metal.Instance), n: ctx_mod.Node, visible: types.Rect, opacity: f32) void {
-    const st = n.style;
+pub fn paintScrollbars(c: *Context, out: *std.ArrayList(metal.Instance), n: *const ctx_mod.Node, visible: types.Rect, opacity: f32) void {
+    const st = &n.style;
     if (st.scroll and st.scrollbar == .overlay) {
         paintOverlayScrollbar(c, out, n, visible, opacity);
         if (st.scroll_x and st.scroll_bar) paintScrollbarX(c, out, n, visible, opacity);
@@ -279,7 +279,7 @@ pub fn paintScrollbars(c: *Context, out: *std.ArrayList(metal.Instance), n: ctx_
 const overlay_linger: f64 = 1.4;
 const overlay_fade: f64 = 0.26;
 
-fn paintOverlayBar(c: *Context, out: *std.ArrayList(metal.Instance), n: ctx_mod.Node, visible: types.Rect, opacity: f32, offset: f32, view_h: f32, content_h: f32, t: f32) void {
+fn paintOverlayBar(c: *Context, out: *std.ArrayList(metal.Instance), n: *const ctx_mod.Node, visible: types.Rect, opacity: f32, offset: f32, view_h: f32, content_h: f32, t: f32) void {
     const color = n.style.scrollbar.overlay;
     const gop = c.overlay_bars.getOrPut(c.gpa, n.id) catch return;
     // First seen: nothing has scrolled yet.
@@ -306,7 +306,7 @@ fn paintOverlayBar(c: *Context, out: *std.ArrayList(metal.Instance), n: ctx_mod.
     }) catch {};
 }
 
-fn paintOverlayScrollbar(c: *Context, out: *std.ArrayList(metal.Instance), n: ctx_mod.Node, visible: types.Rect, opacity: f32) void {
+fn paintOverlayScrollbar(c: *Context, out: *std.ArrayList(metal.Instance), n: *const ctx_mod.Node, visible: types.Rect, opacity: f32) void {
     const offset = c.scroll.get(n.id) orelse 0;
     if (n.first_child == none) return;
     const first = c.node(n.first_child).rect;
@@ -318,7 +318,7 @@ fn paintOverlayScrollbar(c: *Context, out: *std.ArrayList(metal.Instance), n: ct
     paintOverlayBar(c, out, n, visible, opacity, offset, view_h, content_h, t);
 }
 
-fn paintScrollbar(c: *Context, out: *std.ArrayList(metal.Instance), n: ctx_mod.Node, visible: types.Rect, opacity: f32, over_bar: bool) void {
+fn paintScrollbar(c: *Context, out: *std.ArrayList(metal.Instance), n: *const ctx_mod.Node, visible: types.Rect, opacity: f32, over_bar: bool) void {
     if (n.first_child == none) return;
     const first = c.node(n.first_child).rect;
     const last = c.node(n.last_child).rect;
@@ -348,7 +348,7 @@ fn paintScrollbar(c: *Context, out: *std.ArrayList(metal.Instance), n: ctx_mod.N
     }) catch {};
 }
 
-fn paintScrollbarX(c: *Context, out: *std.ArrayList(metal.Instance), n: ctx_mod.Node, visible: types.Rect, opacity: f32) void {
+fn paintScrollbarX(c: *Context, out: *std.ArrayList(metal.Instance), n: *const ctx_mod.Node, visible: types.Rect, opacity: f32) void {
     const offset = c.scroll_x.get(n.id) orelse 0;
     var x0: f32 = std.math.inf(f32);
     var x1: f32 = -std.math.inf(f32);
@@ -384,12 +384,12 @@ pub fn revealCaret(c: *Context, bottom: f32) bool {
     const over = r.y + r.h + 12 - bottom;
     if (r.h <= 0 or over <= 0.5) return false;
     var i: u32 = none;
-    for (c.nodes.items, 0..) |n, k| if (n.id == f.id) {
+    for (c.nodes.items, 0..) |*n, k| if (n.id == f.id) {
         i = @intCast(k);
         break;
     };
     while (i != none) : (i = c.nodes.items[i].parent) {
-        const n = c.nodes.items[i];
+        const n = &c.nodes.items[i];
         if (!n.style.scroll) continue;
         const max = c.scroll_max.get(n.id) orelse 0;
         const s = c.scroll.getOrPut(c.gpa, n.id) catch return false;

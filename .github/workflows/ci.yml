@@ -20,6 +20,52 @@ jobs:
       - uses: actions/checkout@v4
       - run: sh tools/check-security.sh
 
+  wazig:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      attestations: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install wazig and Wasmtime
+        uses: cataggar/ghr/actions/install@v0.10.5
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tools: |
+            cataggar/zig@v0.17.1-wazig.1
+            bytecodealliance/wasmtime@v50.0.1
+      - name: Cache wazig and Wasmtime
+        uses: actions/cache@v4
+        with:
+          path: |
+            .zig-cache/wazig-global
+            ~/.cache/wasmtime
+          key: wazig1-${{ runner.os }}-${{ hashFiles('build.zig.zon', 'build.zig', 'tools/web/build.zig', 'tools/wazig/**') }}
+          restore-keys: |
+            wazig1-${{ runner.os }}-
+      - name: Configure Wasmtime and Zig caches
+        run: |
+          mkdir -p "$HOME/.cache/wasmtime/cache" "$GITHUB_WORKSPACE/.zig-cache/wazig-global"
+          cat > "$HOME/.cache/wasmtime/config.toml" <<EOF
+          [cache]
+          enabled = true
+          directory = "$HOME/.cache/wasmtime/cache"
+          EOF
+          echo "WASMTIME_CACHE_CONFIG=$HOME/.cache/wasmtime/config.toml" >> "$GITHUB_ENV"
+          echo "ZIG_GLOBAL_CACHE_DIR=.zig-cache/wazig-global" >> "$GITHUB_ENV"
+      - name: Build web targets and check line limit with wazig (-fno-llvm +simd128)
+        run: |
+          python3 tools/wazig/build.py lines web-check web-parity web-demo web-bench --summary
+          node tools/web/check.mjs
+      - name: Run portable wasm32-wasi unit and widget tests under Wasmtime
+        run: python3 tools/wazig/build.py test --summary
+      - name: Run headless Wasm UI and raster benchmark smoke check
+        run: python3 tools/wazig/build.py run-web-bench -- --frames=10 --warmup=3
+
   web:
     runs-on: ubuntu-24.04
     steps:

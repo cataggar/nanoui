@@ -12,7 +12,8 @@ const texture_cpu = @import("texture_cpu.zig");
 pub fn texture(out: gpu.Pixels, i: *const gpu.Instance, t: gpu.Texture, scale: f32, b: [4]usize) void {
     var held = texture_cpu.resolve(std.heap.page_allocator, t) orelse return;
     defer held.deinit(std.heap.page_allocator);
-    picture(out, i, .bgra(held.bgra), scale, b);
+    const src = Source.bgra(held.bgra);
+    picture(out, i, &src, scale, b);
 }
 
 /// Pixels to sample: the image atlas, or a texture's rows.
@@ -22,7 +23,7 @@ pub const Source = struct {
     h: usize,
     stride: usize,
 
-    pub fn atlas(p: raster.Pictures) Source {
+    pub fn atlas(p: *const raster.Pictures) Source {
         return .{ .pixels = p.pixels, .w = p.size, .h = p.size, .stride = @as(usize, p.size) * 4 };
     }
 
@@ -32,17 +33,21 @@ pub const Source = struct {
 };
 
 /// A BGRA texel, bilinear as Metal's sampler.
-fn samplePicture(p: Source, u: f32, v: f32) [4]f32 {
-    const fx = u * @as(f32, @floatFromInt(p.w)) - 0.5;
-    const fy = v * @as(f32, @floatFromInt(p.h)) - 0.5;
+fn samplePicture(p: *const Source, u: f32, v: f32) [4]f32 {
+    const wf: f32 = @floatFromInt(p.w);
+    const hf: f32 = @floatFromInt(p.h);
+    const fx = u * wf - 0.5;
+    const fy = v * hf - 0.5;
     const x0f = @floor(fx);
     const y0f = @floor(fy);
     const tx = fx - x0f;
     const ty = fy - y0f;
-    const mx: i64 = @as(i64, @intCast(p.w)) - 1;
-    const my: i64 = @as(i64, @intCast(p.h)) - 1;
-    const xs = [2]usize{ @intCast(std.math.clamp(@as(i64, @intFromFloat(x0f)), 0, mx)), @intCast(std.math.clamp(@as(i64, @intFromFloat(x0f)) + 1, 0, mx)) };
-    const ys = [2]usize{ @intCast(std.math.clamp(@as(i64, @intFromFloat(y0f)), 0, my)), @intCast(std.math.clamp(@as(i64, @intFromFloat(y0f)) + 1, 0, my)) };
+    const mx: i32 = @as(i32, @intCast(p.w)) - 1;
+    const my: i32 = @as(i32, @intCast(p.h)) - 1;
+    const ix: i32 = @intFromFloat(std.math.clamp(x0f, -1, wf));
+    const iy: i32 = @intFromFloat(std.math.clamp(y0f, -1, hf));
+    const xs = [2]usize{ @intCast(std.math.clamp(ix, 0, mx)), @intCast(std.math.clamp(ix + 1, 0, mx)) };
+    const ys = [2]usize{ @intCast(std.math.clamp(iy, 0, my)), @intCast(std.math.clamp(iy + 1, 0, my)) };
     var out: [4]f32 = .{ 0, 0, 0, 0 };
     const weights = [4]f32{ (1 - tx) * (1 - ty), tx * (1 - ty), (1 - tx) * ty, tx * ty };
     for (0..4) |k| {
@@ -52,7 +57,7 @@ fn samplePicture(p: Source, u: f32, v: f32) [4]f32 {
     return out;
 }
 
-pub fn picture(out: gpu.Pixels, i: *const gpu.Instance, p: Source, scale: f32, b: [4]usize) void {
+pub fn picture(out: gpu.Pixels, i: *const gpu.Instance, p: *const Source, scale: f32, b: [4]usize) void {
     if (p.w == 0 or p.h == 0 or p.pixels.len < p.stride * p.h) return;
     const inv = 1 / scale;
     const hw = i.rect[2] * 0.5;

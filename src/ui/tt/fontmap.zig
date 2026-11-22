@@ -28,8 +28,8 @@ test "font reads are exact and release twenty times" {
     const text = "read-only font mapping bytes";
     try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "plain.ttf", .data = text });
     var root_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
-    const root_len = try tmp.dir.realPath(std.testing.io, &root_buf);
-    const path = try std.fs.path.join(gpa, &.{ root_buf[0..root_len], "plain.ttf" });
+    const root = try @import("../../temp_path.zig").tmpDirPath(&tmp, std.testing.io, &root_buf);
+    const path = try std.fs.path.join(gpa, &.{ root, "plain.ttf" });
     defer gpa.free(path);
 
     // The testing allocator also proves that every iteration releases its copy.
@@ -50,8 +50,8 @@ test "heap fonts survive an in-place replacement" {
     defer tmp.cleanup();
     try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "same.ttf", .data = "the original font bytes" });
     var root_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
-    const root_len = try tmp.dir.realPath(std.testing.io, &root_buf);
-    const path = try std.fs.path.join(gpa, &.{ root_buf[0..root_len], "same.ttf" });
+    const root = try @import("../../temp_path.zig").tmpDirPath(&tmp, std.testing.io, &root_buf);
+    const path = try std.fs.path.join(gpa, &.{ root, "same.ttf" });
     defer gpa.free(path);
     var bytes = try readFile(std.testing.io, gpa, path);
     defer freeBytes(std.testing.io, gpa, &bytes);
@@ -90,8 +90,8 @@ test "font reads survive direct in-place replacement twenty times" {
     try std.testing.expectEqual(old_text.len, new_text.len);
     try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "same.ttf", .data = old_text });
     var root_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
-    const root_len = try tmp.dir.realPath(std.testing.io, &root_buf);
-    const path = try std.fs.path.join(gpa, &.{ root_buf[0..root_len], "same.ttf" });
+    const root = try @import("../../temp_path.zig").tmpDirPath(&tmp, std.testing.io, &root_buf);
+    const path = try std.fs.path.join(gpa, &.{ root, "same.ttf" });
     defer gpa.free(path);
 
     for (0..20) |i| {

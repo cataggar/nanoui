@@ -327,6 +327,7 @@ test "send answers synchronously on the calling thread and on a worker thread" {
     try std.testing.expectEqual(@as(u16, 200), r.status());
     try std.testing.expectEqualStrings("sync main", r.body());
     try std.testing.expect(std.mem.startsWith(u8, r.url(), "data:text/plain"));
+    if (builtin.single_threaded) return;
 
     const Worker = struct {
         ok: bool = false,

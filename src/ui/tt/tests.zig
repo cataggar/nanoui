@@ -7,12 +7,14 @@ const font = @import("font.zig");
 const fontdb = @import("fontdb.zig");
 const fontmap = @import("fontmap.zig");
 const raster = @import("raster.zig");
+const tmpDirPath = @import("../../temp_path.zig").tmpDirPath;
 
 const candidates = [_][]const u8{
     "/System/Library/Fonts/Supplemental/Arial.ttf",
     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
     "/usr/share/fonts/TTF/DejaVuSans.ttf",
     "C:\\Windows\\Fonts\\arial.ttf",
+    "src/ui/web_fonts/DejaVuSans.ttf",
 };
 
 fn load(gpa: std.mem.Allocator) ?[]u8 {
@@ -121,8 +123,7 @@ test "font index hits without scanning and directory changes rebuild it" {
     try tmp.dir.createDir(std.testing.io, "fonts", .default_dir);
     try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "fonts/one.ttf", .data = data });
     var root_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
-    const root_len = try tmp.dir.realPath(std.testing.io, &root_buf);
-    const root = root_buf[0..root_len];
+    const root = try tmpDirPath(&tmp, std.testing.io, &root_buf);
     const fonts_dir = try std.fs.path.join(gpa, &.{ root, "fonts" });
     defer gpa.free(fonts_dir);
     // Outside the indexed folder and below cache, never backed-up app data.
@@ -265,8 +266,7 @@ test "an unsupported cmap does not invalidate other warm font faces" {
     try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "fonts/valid.ttf", .data = data });
     try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "fonts/unsupported.ttf", .data = unsupported });
     var root_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
-    const root_len = try tmp.dir.realPath(std.testing.io, &root_buf);
-    const root = root_buf[0..root_len];
+    const root = try tmpDirPath(&tmp, std.testing.io, &root_buf);
     const fonts_dir = try std.fs.path.join(gpa, &.{ root, "fonts" });
     defer gpa.free(fonts_dir);
     const cache_dir = try std.fs.path.join(gpa, &.{ root, "cache" });
@@ -309,7 +309,7 @@ test "a font folder that isn't there leaves the font index written and then hit"
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     var root_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
-    const root = root_buf[0..try tmp.dir.realPath(std.testing.io, &root_buf)];
+    const root = try tmpDirPath(&tmp, std.testing.io, &root_buf);
     // As a per-user font folder is until the user installs a font.
     const missing = try std.fs.path.join(gpa, &.{ root, "no-fonts-yet" });
     defer gpa.free(missing);
@@ -396,7 +396,7 @@ test "the font index keeps whether a face is variable" {
     defer tmp.cleanup();
     try tmp.dir.writeFile(io, .{ .sub_path = "face.ttf", .data = "only stat'ed" });
     var root_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
-    const root = root_buf[0..try tmp.dir.realPath(io, &root_buf)];
+    const root = try tmpDirPath(&tmp, io, &root_buf);
     const face_path = try std.fs.path.join(gpa, &.{ root, "face.ttf" });
     defer gpa.free(face_path);
     const index_path = try std.fs.path.join(gpa, &.{ root, "index.bin" });
@@ -489,8 +489,7 @@ test "an unreadable font during a cold scan does not stay missing after access i
     try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "fonts/a.ttf", .data = data });
     try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "fonts/b.ttf", .data = data });
     var root_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
-    const root_len = try tmp.dir.realPath(std.testing.io, &root_buf);
-    const root = root_buf[0..root_len];
+    const root = try tmpDirPath(&tmp, std.testing.io, &root_buf);
     const fonts_dir = try std.fs.path.join(gpa, &.{ root, "fonts" });
     defer gpa.free(fonts_dir);
     const cache_dir = try std.fs.path.join(gpa, &.{ root, "cache" });
@@ -532,8 +531,7 @@ test "a second scan preserves the disk face start and failed loads still invalid
     try tmp.dir.createDir(std.testing.io, "fonts", .default_dir);
     try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "fonts/one.ttf", .data = data });
     var root_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
-    const root_len = try tmp.dir.realPath(std.testing.io, &root_buf);
-    const root = root_buf[0..root_len];
+    const root = try tmpDirPath(&tmp, std.testing.io, &root_buf);
     const fonts_dir = try std.fs.path.join(gpa, &.{ root, "fonts" });
     defer gpa.free(fonts_dir);
     const cache_dir = try std.fs.path.join(gpa, &.{ root, "cache" });

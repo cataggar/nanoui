@@ -269,7 +269,7 @@ pub const Div = struct {
     /// size, radius and background it animates. Last, so what it animates
     /// wins over what was set before.
     pub fn motion(d: Div, f: @import("motion/motion.zig").Frame) Div {
-        f.apply(d.style());
+        f.applyPtr(d.style());
         if (f.gestures) d.c.node(d.index).interactive = true;
         return d;
     }
@@ -337,5 +337,5 @@ pub const Div = struct {
 
 /// Opens a box; style it with the chain, add children, then `end`.
 pub fn div(c: *Context) Div {
-    return .{ .c = c, .index = c.open(.{}, null) };
+    return .{ .c = c, .index = c.openPtr(&Context.default_style, null) };
 }

@@ -455,12 +455,19 @@ pub const Context = struct {
         return h.final();
     }
 
-    fn add(c: *Context, new_node: Node) u32 {
+    pub const default_style: types.Style = .{};
+    const empty_content: Content = .none;
+    const RtExt = struct {
+        extern fn nanoui_rt_ctx_open(c: *Context, s: *const types.Style, kp: ?[*]const u8, kl: usize) callconv(.c) u32;
+        extern fn nanoui_rt_ctx_end(c: *Context) callconv(.c) void;
+        extern fn nanoui_rt_ctx_leaf(c: *Context, s: *const types.Style, ct: *const Content, kp: ?[*]const u8, kl: usize) callconv(.c) u32;
+    };
+
+    fn add(c: *Context, id: u64, style: *const types.Style, content: *const Content) u32 {
         const parent_index = c.stack.items[c.stack.items.len - 1];
         const index: u32 = @intCast(c.nodes.items.len);
-        var n = new_node;
-        n.parent = parent_index;
-        c.nodes.append(c.gpa, n) catch @panic("OOM");
+        const slot = c.nodes.addOne(c.gpa) catch @panic("OOM");
+        slot.* = .{ .id = id, .parent = parent_index, .style = style.*, .content = content.* };
         const parent = &c.nodes.items[parent_index];
         if (parent.last_child == none) parent.first_child = index else c.nodes.items[parent.last_child].next = index;
         parent.last_child = index;
@@ -470,28 +477,25 @@ pub const Context = struct {
 
     /// Opens a box; its children follow until `end`.
     pub fn open(c: *Context, style: types.Style, key: ?[]const u8) u32 {
-        if (@import("../rt.zig").enabled) {
-            const Ext = struct {
-                extern fn nanoui_rt_ctx_open(c: *Context, s: *const types.Style, kp: ?[*]const u8, kl: usize) callconv(.c) u32;
-            };
-            return Ext.nanoui_rt_ctx_open(c, &style, if (key) |k| k.ptr else null, if (key) |k| k.len else 0);
-        }
-        return c.openImpl(style, key);
+        return c.openPtr(&style, key);
+    }
+
+    pub fn openPtr(c: *Context, style: *const types.Style, key: ?[]const u8) u32 {
+        if (@import("../rt.zig").enabled)
+            return RtExt.nanoui_rt_ctx_open(c, style, if (key) |k| k.ptr else null, if (key) |k| k.len else 0);
+        const index = c.add(c.childId(key), style, &empty_content);
+        c.stack.append(c.gpa, index) catch @panic("OOM");
+        return index;
     }
 
     pub fn openImpl(c: *Context, style: types.Style, key: ?[]const u8) u32 {
-        const index = c.add(.{ .id = c.childId(key), .style = style });
+        const index = c.add(c.childId(key), &style, &empty_content);
         c.stack.append(c.gpa, index) catch @panic("OOM");
         return index;
     }
 
     pub fn end(c: *Context) void {
-        if (@import("../rt.zig").enabled) {
-            const Ext = struct {
-                extern fn nanoui_rt_ctx_end(c: *Context) callconv(.c) void;
-            };
-            return Ext.nanoui_rt_ctx_end(c);
-        }
+        if (@import("../rt.zig").enabled) return RtExt.nanoui_rt_ctx_end(c);
         c.endImpl();
     }
 
@@ -502,17 +506,17 @@ pub const Context = struct {
 
     /// Adds a box without children.
     pub fn leaf(c: *Context, style: types.Style, content: Content, key: ?[]const u8) u32 {
-        if (@import("../rt.zig").enabled) {
-            const Ext = struct {
-                extern fn nanoui_rt_ctx_leaf(c: *Context, s: *const types.Style, ct: *const Content, kp: ?[*]const u8, kl: usize) callconv(.c) u32;
-            };
-            return Ext.nanoui_rt_ctx_leaf(c, &style, &content, if (key) |k| k.ptr else null, if (key) |k| k.len else 0);
-        }
-        return c.leafImpl(style, content, key);
+        return c.leafPtr(&style, &content, key);
+    }
+
+    pub fn leafPtr(c: *Context, style: *const types.Style, content: *const Content, key: ?[]const u8) u32 {
+        if (@import("../rt.zig").enabled)
+            return RtExt.nanoui_rt_ctx_leaf(c, style, content, if (key) |k| k.ptr else null, if (key) |k| k.len else 0);
+        return c.add(c.childId(key), style, content);
     }
 
     pub fn leafImpl(c: *Context, style: types.Style, content: Content, key: ?[]const u8) u32 {
-        return c.add(.{ .id = c.childId(key), .style = style, .content = content });
+        return c.add(c.childId(key), &style, &content);
     }
 
     pub fn node(c: *Context, index: u32) *Node {

@@ -186,6 +186,20 @@ fn erf(x: f32) f32 {
     return s - s / (y * y);
 }
 
+fn erf4(x: @Vector(4, f32)) @Vector(4, f32) {
+    const zero: @Vector(4, f32) = @splat(0);
+    const one: @Vector(4, f32) = @splat(1);
+    const neg_one: @Vector(4, f32) = @splat(-1);
+    const s = @select(f32, x < zero, neg_one, one);
+    const a = @abs(x);
+    const c1: @Vector(4, f32) = @splat(0.278393);
+    const c2: @Vector(4, f32) = @splat(0.230389);
+    const c3: @Vector(4, f32) = @splat(0.078108);
+    var y = one + (c1 + (c2 + c3 * (a * a)) * a) * a;
+    y *= y;
+    return s - s / (y * y);
+}
+
 fn blurAlongX(x: f32, y: f32, sigma: f32, corner: f32, hw: f32, hh: f32) f32 {
     const delta = @min(hh - corner - @abs(y), 0);
     const curved = hw - corner + @sqrt(@max(0, corner * corner - delta * delta));
@@ -198,6 +212,76 @@ fn blurAlongX(x: f32, y: f32, sigma: f32, corner: f32, hw: f32, hh: f32) f32 {
 /// Y samples of each shadow's Gaussian: 8, as the shader. Hill-climb's
 /// `--cheap-shadow` sets 1 (faster, but no longer Metal's pixels).
 pub var shadow_samples: u32 = 8;
+
+pub const ShadowRow = struct {
+    n: usize,
+    step: f32,
+    k: f32,
+    flat: bool,
+    curved: [8]f32,
+    g: [8]f32,
+};
+
+pub fn shadowRow(py: f32, hw: f32, hh: f32, corner: f32, sigma: f32) ShadowRow {
+    const c = @abs(corner);
+    const n = @min(@max(shadow_samples, 1), 8);
+    const low = py - hh;
+    const high = py + hh;
+    const start = std.math.clamp(-3 * sigma, low, high);
+    const end = std.math.clamp(3 * sigma, low, high);
+    const step = (end - start) / @as(f32, @floatFromInt(n));
+    var r: ShadowRow = .{
+        .n = n,
+        .step = step,
+        .k = @sqrt(@as(f32, 0.5)) / sigma,
+        .flat = true,
+        .curved = @splat(0),
+        .g = @splat(0),
+    };
+    var y = start + step * 0.5;
+    for (0..n) |s| {
+        const delta = @min(hh - c - @abs(py - y), 0);
+        r.curved[s] = hw - c + @sqrt(@max(0, c * c - delta * delta));
+        if (s > 0 and r.curved[s] != r.curved[0]) r.flat = false;
+        r.g[s] = gaussian(y, sigma);
+        y += step;
+    }
+    return r;
+}
+
+pub inline fn shadowRowAlpha(r: *const ShadowRow, px: f32) f32 {
+    if (r.step == 0) return 0;
+    var alpha: f32 = 0;
+    if (r.flat) {
+        const cv = r.curved[0];
+        const lo = 0.5 + 0.5 * erf((px - cv) * r.k);
+        const hi = 0.5 + 0.5 * erf((px + cv) * r.k);
+        const bx = hi - lo;
+        for (0..r.n) |s| alpha += bx * r.g[s] * r.step;
+        return alpha;
+    }
+    if (r.n == 8) {
+        const half: @Vector(4, f32) = @splat(0.5);
+        const pxv: @Vector(4, f32) = @splat(px);
+        const kv: @Vector(4, f32) = @splat(r.k);
+        const stepv: @Vector(4, f32) = @splat(r.step);
+        const cv0: @Vector(4, f32) = r.curved[0..4].*;
+        const g0: @Vector(4, f32) = r.g[0..4].*;
+        const t0 = ((half + half * erf4((pxv + cv0) * kv)) - (half + half * erf4((pxv - cv0) * kv))) * g0 * stepv;
+        const cv1: @Vector(4, f32) = r.curved[4..8].*;
+        const g1: @Vector(4, f32) = r.g[4..8].*;
+        const t1 = ((half + half * erf4((pxv + cv1) * kv)) - (half + half * erf4((pxv - cv1) * kv))) * g1 * stepv;
+        alpha = (((((((alpha + t0[0]) + t0[1]) + t0[2]) + t0[3]) + t1[0]) + t1[1]) + t1[2]) + t1[3];
+        return alpha;
+    }
+    for (0..r.n) |s| {
+        const cv = r.curved[s];
+        const lo = 0.5 + 0.5 * erf((px - cv) * r.k);
+        const hi = 0.5 + 0.5 * erf((px + cv) * r.k);
+        alpha += (hi - lo) * r.g[s] * r.step;
+    }
+    return alpha;
+}
 
 pub fn shadowAlpha(px: f32, py: f32, hw: f32, hh: f32, corner: f32, sigma: f32) f32 {
     const c = @abs(corner);
