@@ -66,7 +66,7 @@ const Decoder = struct {
         }
     }
 
-    fn windowBits(d: *Decoder) Error!u6 {
+    fn windowBits(d: *Decoder) Error!u5 {
         if (try d.r.bits(1) == 0) return 16;
         const n = try d.r.bits(3);
         if (n != 0) return @intCast(17 + n);

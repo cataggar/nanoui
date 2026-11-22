@@ -54,6 +54,10 @@ pub fn drawRegion(out: gpu.Pixels, instances: []const gpu.Instance, mask: Mask, 
 /// `drawRegion`, keeping nested group layers at `depth` and deeper so a
 /// masked group does not reuse its own or an ancestor's layer buffer.
 pub fn drawRegionDepth(out: gpu.Pixels, instances: []const gpu.Instance, mask: Mask, pictures: Pictures, scale: f32, clear: types.Color, region: [4]usize, depth: u16) void {
+    drawRegionDepthPtr(out, instances, &mask, &pictures, scale, clear, region, depth);
+}
+
+pub fn drawRegionDepthPtr(out: gpu.Pixels, instances: []const gpu.Instance, mask: *const Mask, pictures: *const Pictures, scale: f32, clear: types.Color, region: [4]usize, depth: u16) void {
     // Opaque, but on the Mac and for a transparent window (a clear of nothing).
     const alpha = if (mask.native_pixels.len > 0 or clear.a == 0) clear.a else 1;
     const px: [4]u8 = .{ unit(clear.b * alpha), unit(clear.g * alpha), unit(clear.r * alpha), unit(alpha) };
@@ -70,7 +74,7 @@ pub fn drawRegionDepth(out: gpu.Pixels, instances: []const gpu.Instance, mask: M
         job.clear = null;
         if (end == instances.len) break;
         if (instances[end].kind == gpu.Kind.glass) {
-            drawOne(out, &instances[end], mask, pictures, scale, region);
+            drawOnePtr(out, &instances[end], mask, pictures, scale, region);
             start = end + 1;
             continue;
         }
@@ -97,8 +101,8 @@ pub var threads: usize = Band.thread_limit;
 const Band = struct {
     out: gpu.Pixels,
     instances: []const gpu.Instance,
-    mask: Mask,
-    pictures: Pictures,
+    mask: *const Mask,
+    pictures: *const Pictures,
     scale: f32,
     /// The pixel the rows are cleared to first, if they are.
     clear: ?u32,
@@ -108,19 +112,19 @@ const Band = struct {
     /// Fewer pixels than this a thread: not worth starting one.
     const min_pixels = 1 << 17;
 
-    fn rows(job: Band, y0: usize, y1: usize) void {
+    fn rows(job: *const Band, y0: usize, y1: usize) void {
         const r: [4]usize = .{ job.region[0], y0, job.region[2], y1 };
         if (job.clear) |px| {
             const words: []u32 = @alignCast(std.mem.bytesAsSlice(u32, job.out.bytes[0 .. job.out.width * job.out.height * 4]));
             for (y0..y1) |y| @memset(words[y * job.out.width + r[0] .. y * job.out.width + r[2]], px);
         }
-        for (job.instances) |*i| drawOne(job.out, i, job.mask, job.pictures, job.scale, r);
+        for (job.instances) |*i| drawOnePtr(job.out, i, job.mask, job.pictures, job.scale, r);
     }
 
     /// About how many pixels the band's instances cover in its region (all
     /// of it when the rows are cleared): a few small instances between
     /// groups or glass are not worth a thread.
-    fn work(job: Band) usize {
+    fn work(job: *const Band) usize {
         const r = job.region;
         const whole = (r[2] - r[0]) * (r[3] - r[1]);
         if (job.clear != null) return whole;
@@ -136,7 +140,7 @@ const Band = struct {
     }
 
     /// Draws the region's rows, shared among threads when there are many.
-    fn share(job: Band) void {
+    fn share(job: *const Band) void {
         if (@import("builtin").single_threaded) return job.rows(job.region[1], job.region[3]);
         const height = job.region[3] - job.region[1];
         const cpus = std.Thread.getCpuCount() catch 1;
@@ -298,12 +302,19 @@ pub fn bounds(out: gpu.Pixels, i: *const gpu.Instance, scale: f32) ?[4]usize {
 }
 
 pub fn drawOne(out: gpu.Pixels, i: *const gpu.Instance, mask: Mask, pictures: Pictures, scale: f32, region: [4]usize) void {
+    drawOnePtr(out, i, &mask, &pictures, scale, region);
+}
+
+pub fn drawOnePtr(out: gpu.Pixels, i: *const gpu.Instance, mask: *const Mask, pictures: *const Pictures, scale: f32, region: [4]usize) void {
     if (i.kind == gpu.Kind.layer_begin or i.kind == gpu.Kind.layer_end or i.kind == gpu.Kind.layer_composite) return;
     const all = bounds(out, i, scale) orelse return;
     const b: [4]usize = .{ @max(all[0], region[0]), @max(all[1], region[1]), @min(all[2], region[2]), @min(all[3], region[3]) };
     if (b[2] <= b[0] or b[3] <= b[1]) return;
     if (i.kind == gpu.Kind.text) return @import("raster_glyph.zig").glyph(out, i, mask, scale, b);
-    if (i.kind == gpu.Kind.image) return pic.picture(out, i, .atlas(pictures), scale, b);
+    if (i.kind == gpu.Kind.image) {
+        const src = Source.atlas(pictures);
+        return pic.picture(out, i, &src, scale, b);
+    }
     if (i.kind == gpu.Kind.texture) {
         const slot: usize = @intFromFloat(i.border_width);
         if (slot < pictures.textures.len) pic.texture(out, i, pictures.textures[slot], scale, b);
@@ -405,6 +416,17 @@ fn mixColor(a: [4]f32, b: [4]f32, t_in: f32) [4]f32 {
     return .{ a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t, a[3] + (b[3] - a[3]) * t };
 }
 
+fn innerSpanX(b: [4]usize, cx: f32, lim: f32, scale: f32, inv: f32) [2]usize {
+    if (lim <= 0) return .{ b[2], b[2] };
+    const bf0: f32 = @floatFromInt(b[0]);
+    const bf2: f32 = @floatFromInt(b[2]);
+    var x0: usize = @intFromFloat(std.math.clamp(@ceil((cx - lim) * scale - 0.5), bf0, bf2));
+    var x1: usize = @intFromFloat(std.math.clamp(@floor((cx + lim) * scale - 0.5) + 1, bf0, bf2));
+    while (x0 < x1 and !(@abs((@as(f32, @floatFromInt(x0)) + 0.5) * inv - cx) < lim)) x0 += 1;
+    while (x1 > x0 and !(@abs((@as(f32, @floatFromInt(x1 - 1)) + 0.5) * inv - cx) < lim)) x1 -= 1;
+    return .{ x0, x1 };
+}
+
 fn quad(out: gpu.Pixels, i: *const gpu.Instance, gradients: []const [4]f32, scale: f32, b: [4]usize) void {
     const hw = i.rect[2] * 0.5;
     const hh = i.rect[3] * 0.5;
@@ -420,49 +442,81 @@ fn quad(out: gpu.Pixels, i: *const gpu.Instance, gradients: []const [4]f32, scal
     const bottom = if (grad) gpu.gradientBottom(i.uv) else i.color;
     var c = i.color;
     const bc = i.border_color;
-    // Inside this, a pixel is wholly the fill: no edge, corner or border.
-    const corner_ext: f32 = if (r > 0) 1.52866495 * r else r_abs;
-    const solid = @max(corner_ext, if (has_border) bw else 0) + 2 / scale;
     const inv = 1 / scale;
     const local_px = pixelAt(i, inv);
+    // Inside this, a pixel is wholly the fill: no edge, corner or border.
+    const corner_ext: f32 = if (r > 0) 1.52866495 * r else r_abs;
+    const edge_pad = (if (has_border) bw else 0) + 2 * @max(local_px, 0.0001);
+    const solid = @max(corner_ext, edge_pad);
     const rot = i.xf[0] != 0 or gpu.hasMatrix(i);
+    const span_narrow = if (!rot and i.clip_round == 0) innerSpanX(b, cx, hw - solid, scale, inv) else [2]usize{ b[2], b[2] };
+    const span_wide = if (!rot and i.clip_round == 0) innerSpanX(b, cx, hw - edge_pad, scale, inv) else [2]usize{ b[2], b[2] };
     for (b[1]..b[3]) |y| {
         const wy = (@as(f32, @floatFromInt(y)) + 0.5) * inv;
         const row = y * out.width * 4;
-        const inner_y = !rot and @abs(wy - cy) < hh - solid;
+        const dy_abs = @abs(wy - cy);
+        const inner_y = !rot and dy_abs < hh - solid;
+        const edge_inner_y = !rot and dy_abs < hh - edge_pad;
         if (grad and !rot) c = mixColor(i.color, bottom, (wy - i.rect[1]) / @max(i.rect[3], 1e-4));
         if (stops and !rot) c = gpu.gradientAt(gradients, i.uv, wy - i.rect[1]);
-        for (b[0]..b[2]) |x| {
-            const wx = (@as(f32, @floatFromInt(x)) + 0.5) * inv;
-            const u = unrotate(i, wx, wy);
-            if (rot and (u[0] < i.rect[0] or u[1] < i.rect[1] or u[0] > i.rect[0] + i.rect[2] or u[1] > i.rect[1] + i.rect[3])) continue;
-            if (grad and rot) c = mixColor(i.color, bottom, (u[1] - i.rect[1]) / @max(i.rect[3], 1e-4));
-            if (stops and rot) c = gpu.gradientAt(gradients, i.uv, u[1] - i.rect[1]);
-            const pxl = u[0] - cx;
-            const py = u[1] - cy;
-            const cut = clipCover(i, wx, wy, inv);
-            if (inner_y and @abs(pxl) < hw - solid) {
-                const a = c[3] * cut;
-                blend(out.bytes, row + x * 4, c[0] * a, c[1] * a, c[2] * a, a);
-                continue;
-            }
-            const sd = cornerSdf(pxl, py, hw, hh, r);
-            const aa = @max(sd[1] * local_px, 0.0001) * 0.5;
-            const coverage = 1 - smoothstep(-aa, aa, sd[0]);
-            if (coverage <= 0) continue;
-            // Premultiplied: the border is laid over the fill (shader.metal).
-            var col: [4]f32 = .{ c[0] * c[3], c[1] * c[3], c[2] * c[3], c[3] };
-            if (has_border) {
-                const t = smoothstep(-bw - aa, -bw + aa, sd[0]);
-                var edge: [4]f32 = .{ bc[0] * bc[3], bc[1] * bc[3], bc[2] * bc[3], bc[3] };
-                if (i.uv[0] > 0.5) {
-                    const dc = shapes.dashCover(pxl, py, hw, hh, r, bw, inv);
-                    for (&edge) |*e| e.* *= dc;
+        const sp = if (inner_y) span_wide else if (edge_inner_y) span_narrow else [2]usize{ b[2], b[2] };
+        const has_span = sp[0] < sp[1];
+        var seg: usize = 0;
+        while (seg < (if (has_span) @as(usize, 2) else @as(usize, 1))) : (seg += 1) {
+            if (has_span and seg == 1) {
+                if (c[3] == 1) {
+                    const px4: [4]u8 = .{
+                        @intFromFloat(@min(255, c[2] * 255 + 0.5)),
+                        @intFromFloat(@min(255, c[1] * 255 + 0.5)),
+                        @intFromFloat(@min(255, c[0] * 255 + 0.5)),
+                        255,
+                    };
+                    if (@intFromPtr(out.bytes.ptr) & 3 == 0) {
+                        const words: []u32 = @alignCast(std.mem.bytesAsSlice(u32, out.bytes[row + sp[0] * 4 .. row + sp[1] * 4]));
+                        @memset(words, @bitCast(px4));
+                    } else for (sp[0]..sp[1]) |sx| out.bytes[row + sx * 4 ..][0..4].* = px4;
+                } else if (c[3] > 0) {
+                    const ca = c[3];
+                    const cr = c[0] * ca;
+                    const cg = c[1] * ca;
+                    const cb = c[2] * ca;
+                    for (sp[0]..sp[1]) |sx| blend(out.bytes, row + sx * 4, cr, cg, cb, ca);
                 }
-                for (0..4) |k| col[k] += (edge[k] + col[k] * (1 - edge[3]) - col[k]) * t;
             }
-            const m = coverage * cut;
-            blend(out.bytes, row + x * 4, col[0] * m, col[1] * m, col[2] * m, col[3] * m);
+            const x_start = if (has_span and seg == 1) sp[1] else b[0];
+            const x_end = if (has_span and seg == 0) sp[0] else b[2];
+            for (x_start..x_end) |x| {
+                const wx = (@as(f32, @floatFromInt(x)) + 0.5) * inv;
+                const u = unrotate(i, wx, wy);
+                if (rot and (u[0] < i.rect[0] or u[1] < i.rect[1] or u[0] > i.rect[0] + i.rect[2] or u[1] > i.rect[1] + i.rect[3])) continue;
+                if (grad and rot) c = mixColor(i.color, bottom, (u[1] - i.rect[1]) / @max(i.rect[3], 1e-4));
+                if (stops and rot) c = gpu.gradientAt(gradients, i.uv, u[1] - i.rect[1]);
+                const pxl = u[0] - cx;
+                const py = u[1] - cy;
+                const cut = clipCover(i, wx, wy, inv);
+                if ((inner_y and @abs(pxl) < hw - edge_pad) or (edge_inner_y and @abs(pxl) < hw - solid)) {
+                    const a = c[3] * cut;
+                    blend(out.bytes, row + x * 4, c[0] * a, c[1] * a, c[2] * a, a);
+                    continue;
+                }
+                const sd = cornerSdf(pxl, py, hw, hh, r);
+                const aa = @max(sd[1] * local_px, 0.0001) * 0.5;
+                const coverage = 1 - smoothstep(-aa, aa, sd[0]);
+                if (coverage <= 0) continue;
+                // Premultiplied: the border is laid over the fill (shader.metal).
+                var col: [4]f32 = .{ c[0] * c[3], c[1] * c[3], c[2] * c[3], c[3] };
+                if (has_border) {
+                    const t = smoothstep(-bw - aa, -bw + aa, sd[0]);
+                    var edge: [4]f32 = .{ bc[0] * bc[3], bc[1] * bc[3], bc[2] * bc[3], bc[3] };
+                    if (i.uv[0] > 0.5) {
+                        const dc = shapes.dashCover(pxl, py, hw, hh, r, bw, inv);
+                        for (&edge) |*e| e.* *= dc;
+                    }
+                    for (0..4) |k| col[k] += (edge[k] + col[k] * (1 - edge[3]) - col[k]) * t;
+                }
+                const m = coverage * cut;
+                blend(out.bytes, row + x * 4, col[0] * m, col[1] * m, col[2] * m, col[3] * m);
+            }
         }
     }
 }
@@ -493,6 +547,8 @@ fn pane(out: gpu.Pixels, i: *const gpu.Instance, scale: f32, b: [4]usize) void {
     }
 }
 fn shadow(out: gpu.Pixels, i: *const gpu.Instance, scale: f32, b: [4]usize) void {
+    const c = i.color;
+    if (c[3] <= 0) return;
     const hw = i.rect[2] * 0.5;
     const hh = i.rect[3] * 0.5;
     const cx = i.rect[0] + hw;
@@ -500,25 +556,41 @@ fn shadow(out: gpu.Pixels, i: *const gpu.Instance, scale: f32, b: [4]usize) void
     const r_abs = @min(@abs(i.radius), @min(hw, hh));
     const r: f32 = if (i.radius < 0) -r_abs else r_abs;
     const sigma = @max(i.border_width, 0.25);
-    const c = i.color;
     const inv = 1 / scale;
+    const rot = i.xf[0] != 0 or gpu.hasMatrix(i);
     for (b[1]..b[3]) |y| {
         const wy = (@as(f32, @floatFromInt(y)) + 0.5) * inv;
         const row = y * out.width * 4;
+        var sr: shapes.ShadowRow = undefined;
+        if (!rot) {
+            sr = shapes.shadowRow(wy - cy, hw, hh, r, sigma);
+            if (sr.step == 0) continue;
+        }
         for (b[0]..b[2]) |x| {
             const wx = (@as(f32, @floatFromInt(x)) + 0.5) * inv;
-            const up = unrotate(i, wx, wy);
-            const pxl = up[0] - cx;
-            const py = up[1] - cy;
-            var a = shapes.shadowAlpha(pxl, py, hw, hh, r, sigma) * c[3] * clipCover(i, wx, wy, inv);
+            const cut = clipCover(i, wx, wy, inv);
+            if (cut <= 0) continue;
+            var pxl: f32 = wx - cx;
+            var py: f32 = wy - cy;
+            var sa: f32 = undefined;
+            if (rot) {
+                const up = unrotate(i, wx, wy);
+                pxl = up[0] - cx;
+                py = up[1] - cy;
+                sa = shapes.shadowAlpha(pxl, py, hw, hh, r, sigma);
+            } else {
+                sa = shapes.shadowRowAlpha(&sr, pxl);
+            }
+            var a = sa * c[3] * cut;
             // Knocked out: nothing inside the box (`uv` its offset from the shadow's rect).
             if (i.kind == gpu.Kind.shadow_out) {
                 const s = i.uv[2];
                 const rb: f32 = if (r < 0) -@max(-r - s, 0) else @max(r - s, 0);
                 a *= std.math.clamp(cornerSdf(pxl - i.uv[0], py - i.uv[1], @max(hw - s, 0), @max(hh - s, 0), rb)[0] + 0.5, 0, 1);
             }
-            if (a > 0) a = std.math.clamp(a + shapes.shadowDither(x, y), 0, 1);
-            blend(out.bytes, row + x * 4, c[0] * a, c[1] * a, c[2] * a, a);
+            if (a <= 0) continue;
+            a = std.math.clamp(a + shapes.shadowDither(x, y), 0, 1);
+            if (a > 0) blend(out.bytes, row + x * 4, c[0] * a, c[1] * a, c[2] * a, a);
         }
     }
 }

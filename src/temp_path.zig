@@ -31,6 +31,20 @@ pub fn tempPath(buf: []u8, name: []const u8) ![]const u8 {
     return std.fmt.bufPrint(buf, "{s}{s}{s}", .{ ".zig-cache/tmp", std.fs.path.sep_str, name });
 }
 
+/// A `std.testing.TmpDir`'s path for callers that reopen it through `cwd()`:
+/// the OS's real path where supported, or `.zig-cache/tmp/<sub_path>` when
+/// `fd_realpath` does not exist (WASI).
+pub fn tmpDirPath(tmp: *const std.testing.TmpDir, io: std.Io, buf: []u8) ![]const u8 {
+    if (tmp.dir.realPath(io, buf)) |n| return buf[0..n] else |err| switch (err) {
+        error.OperationUnsupported => return std.fmt.bufPrint(buf, ".zig-cache{s}tmp{s}{s}", .{
+            std.fs.path.sep_str,
+            std.fs.path.sep_str,
+            &tmp.sub_path,
+        }),
+        else => return err,
+    }
+}
+
 test "a scratch path is under the project's cache, which is writable" {
     const testing = std.testing;
     var buf: [256]u8 = undefined;

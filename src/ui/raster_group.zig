@@ -17,8 +17,8 @@ pub fn draw(
     span: []const gpu.Instance,
     begin_inst: *const gpu.Instance,
     end_inst: *const gpu.Instance,
-    mask: raster.Mask,
-    pictures: raster.Pictures,
+    mask: *const raster.Mask,
+    pictures: *const raster.Pictures,
     scale: f32,
     region: [4]usize,
     depth: u16,
@@ -48,7 +48,7 @@ pub fn draw(
     // Masked, `drawRegionDepth` clears the area itself.
     if (glassy) @memset(tmp_bytes, 0) else if (!masked) clear(tmp, area);
     if (masked) {
-        raster.drawRegionDepth(tmp, span, mask, pictures, scale, types.Color.transparent, area, depth +| 1);
+        raster.drawRegionDepthPtr(tmp, span, mask, pictures, scale, types.Color.transparent, area, depth +| 1);
     } else {
         drawLayer(tmp, span, mask, pictures, scale, area, depth);
     }
@@ -60,8 +60,8 @@ pub fn draw(
 fn drawGlassBehind(
     out: gpu.Pixels,
     span: []const gpu.Instance,
-    mask: raster.Mask,
-    pictures: raster.Pictures,
+    mask: *const raster.Mask,
+    pictures: *const raster.Pictures,
     scale: f32,
     region: [4]usize,
 ) void {
@@ -72,7 +72,7 @@ fn drawGlassBehind(
             continue;
         }
         if (span[at].kind != gpu.Kind.glass) continue;
-        raster.drawOne(out, &span[at], mask, pictures, scale, region);
+        raster.drawOnePtr(out, &span[at], mask, pictures, scale, region);
     }
 }
 
@@ -81,8 +81,8 @@ fn drawGlassBehind(
 fn drawLayer(
     tmp: gpu.Pixels,
     span: []const gpu.Instance,
-    mask: raster.Mask,
-    pictures: raster.Pictures,
+    mask: *const raster.Mask,
+    pictures: *const raster.Pictures,
     scale: f32,
     area: [4]usize,
     depth: u16,
@@ -98,7 +98,7 @@ fn drawLayer(
             continue;
         }
         const skip = gi.kind == gpu.Kind.glass or gi.kind == gpu.Kind.layer_end;
-        if (!skip) raster.drawOne(tmp, gi, mask, pictures, scale, area);
+        if (!skip) raster.drawOnePtr(tmp, gi, mask, pictures, scale, area);
         at += 1;
     }
 }

@@ -11,7 +11,7 @@ const unit = raster.unit;
 const unrotate = raster.unrotate;
 
 /// The atlas sampled as Metal's linear filter with clamped edges does.
-fn sample(mask: Mask, u: f32, v: f32) f32 {
+fn sample(mask: *const Mask, u: f32, v: f32) f32 {
     const s: f32 = @floatFromInt(mask.size);
     const fx = u * s - 0.5;
     const fy = v * s - 0.5;
@@ -19,16 +19,23 @@ fn sample(mask: Mask, u: f32, v: f32) f32 {
     const y0f = @floor(fy);
     const tx = fx - x0f;
     const ty = fy - y0f;
-    const max: i64 = @as(i64, mask.size) - 1;
-    const x0: usize = @intCast(std.math.clamp(@as(i64, @intFromFloat(x0f)), 0, max));
-    const y0: usize = @intCast(std.math.clamp(@as(i64, @intFromFloat(y0f)), 0, max));
-    const x1: usize = @intCast(std.math.clamp(@as(i64, @intFromFloat(x0f)) + 1, 0, max));
-    const y1: usize = @intCast(std.math.clamp(@as(i64, @intFromFloat(y0f)) + 1, 0, max));
+    const max: i32 = @as(i32, @intCast(mask.size)) - 1;
+    const ix: i32 = @intFromFloat(std.math.clamp(x0f, -1, s));
+    const iy: i32 = @intFromFloat(std.math.clamp(y0f, -1, s));
+    const x0: usize = @intCast(std.math.clamp(ix, 0, max));
+    const y0: usize = @intCast(std.math.clamp(iy, 0, max));
+    const x1: usize = @intCast(std.math.clamp(ix + 1, 0, max));
+    const y1: usize = @intCast(std.math.clamp(iy + 1, 0, max));
     const n: usize = mask.size;
-    const a = @as(f32, @floatFromInt(mask.pixels[y0 * n + x0]));
-    const bb = @as(f32, @floatFromInt(mask.pixels[y0 * n + x1]));
-    const c = @as(f32, @floatFromInt(mask.pixels[y1 * n + x0]));
-    const d = @as(f32, @floatFromInt(mask.pixels[y1 * n + x1]));
+    const m00 = mask.pixels[y0 * n + x0];
+    const m01 = mask.pixels[y0 * n + x1];
+    const m10 = mask.pixels[y1 * n + x0];
+    const m11 = mask.pixels[y1 * n + x1];
+    if ((m00 | m01 | m10 | m11) == 0) return 0;
+    const a = @as(f32, @floatFromInt(m00));
+    const bb = @as(f32, @floatFromInt(m01));
+    const c = @as(f32, @floatFromInt(m10));
+    const d = @as(f32, @floatFromInt(m11));
     const top = a + (bb - a) * tx;
     const bottom = c + (d - c) * tx;
     return (top + (bottom - top) * ty) / 255;
@@ -36,25 +43,33 @@ fn sample(mask: Mask, u: f32, v: f32) f32 {
 
 /// A text quad: its atlas cell's coverage, native ClearType and grayscale
 /// glyphs blended as DirectWrite blends them, by the quad's color.
-pub fn glyph(out: gpu.Pixels, i: *const gpu.Instance, mask: Mask, scale: f32, b: [4]usize) void {
-    if (mask.size == 0) return;
+pub fn glyph(out: gpu.Pixels, i: *const gpu.Instance, mask: *const Mask, scale: f32, b: [4]usize) void {
+    if (mask.size == 0 or i.color[3] <= 0) return;
     const inv = 1 / scale;
     const c = i.color;
     const rot = i.xf[0] != 0 or gpu.hasMatrix(i);
     for (b[1]..b[3]) |y| {
         const wy = (@as(f32, @floatFromInt(y)) + 0.5) * inv;
         const row = y * out.width * 4;
+        const base_v = if (!rot) i.uv[1] + (i.uv[3] - i.uv[1]) * ((wy - i.rect[1]) / i.rect[3]) else 0;
         for (b[0]..b[2]) |x| {
             const wx = (@as(f32, @floatFromInt(x)) + 0.5) * inv;
-            const up = unrotate(i, wx, wy);
-            if (rot and (up[0] < i.rect[0] or up[1] < i.rect[1] or up[0] > i.rect[0] + i.rect[2] or up[1] > i.rect[1] + i.rect[3])) continue;
-            const tx = (up[0] - i.rect[0]) / i.rect[2];
-            const ty = (up[1] - i.rect[1]) / i.rect[3];
-            const u = i.uv[0] + (i.uv[2] - i.uv[0]) * tx;
-            const v = i.uv[1] + (i.uv[3] - i.uv[1]) * ty;
+            var u: f32 = undefined;
+            var v: f32 = base_v;
+            if (rot) {
+                const up = unrotate(i, wx, wy);
+                if (up[0] < i.rect[0] or up[1] < i.rect[1] or up[0] > i.rect[0] + i.rect[2] or up[1] > i.rect[1] + i.rect[3]) continue;
+                const tx = (up[0] - i.rect[0]) / i.rect[2];
+                const ty = (up[1] - i.rect[1]) / i.rect[3];
+                u = i.uv[0] + (i.uv[2] - i.uv[0]) * tx;
+                v = i.uv[1] + (i.uv[3] - i.uv[1]) * ty;
+            } else {
+                u = i.uv[0] + (i.uv[2] - i.uv[0]) * ((wx - i.rect[0]) / i.rect[2]);
+            }
             var opacity = c[3] * clipCover(i, wx, wy, inv);
             // A truncated line fading out, as the shader fades it.
             if (i.border_width > 0) opacity *= std.math.clamp((i.radius - wx) / i.border_width, 0, 1);
+            if (opacity <= 0) continue;
             const at = row + x * 4;
             if (mask.native_pixels.len > 0) {
                 const side: f32 = @floatFromInt(mask.size);
@@ -77,12 +92,12 @@ pub fn glyph(out: gpu.Pixels, i: *const gpu.Instance, mask: Mask, scale: f32, b:
                         continue;
                     }
                     const a = gray_params.coverage(sample(mask, u, v), 0.25 * c[0] + 0.5 * c[1] + 0.25 * c[2], lightness, false) * opacity;
-                    blend(out.bytes, at, c[0] * a, c[1] * a, c[2] * a, a);
+                    if (a > 0) blend(out.bytes, at, c[0] * a, c[1] * a, c[2] * a, a);
                     continue;
                 }
             }
             const a = sample(mask, u, v) * opacity;
-            blend(out.bytes, row + x * 4, c[0] * a, c[1] * a, c[2] * a, a);
+            if (a > 0) blend(out.bytes, at, c[0] * a, c[1] * a, c[2] * a, a);
         }
     }
 }

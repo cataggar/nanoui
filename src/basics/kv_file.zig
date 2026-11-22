@@ -78,7 +78,8 @@ test "a file store keeps values across opens, and ignores a broken file" {
     if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     const io = std.testing.io;
-    const dir = "/tmp/nanoui-test-kv-file";
+    var dir_buf: [256]u8 = undefined;
+    const dir = try @import("../temp_path.zig").tempPath(&dir_buf, "nanoui-test-kv-file");
     const cwd = std.Io.Dir.cwd();
     cwd.deleteTree(io, dir) catch {};
     defer cwd.deleteTree(io, dir) catch {};
@@ -98,7 +99,8 @@ test "a file store keeps values across opens, and ignores a broken file" {
         try std.testing.expectEqualStrings("a \"b\"\n\tc", f.mem.map.get("quote").?);
         try std.testing.expect(!f.mem.map.contains("gone"));
     }
-    try cwd.writeFile(io, .{ .sub_path = dir ++ "/kv.json", .data = "{not json" });
+    var broken_buf: [256]u8 = undefined;
+    try cwd.writeFile(io, .{ .sub_path = try std.fmt.bufPrint(&broken_buf, "{s}/kv.json", .{dir}), .data = "{not json" });
     var f = try File.open(gpa, io, dir);
     defer f.deinit();
     try std.testing.expectEqual(@as(u32, 0), f.mem.map.count());

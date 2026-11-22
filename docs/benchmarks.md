@@ -173,9 +173,29 @@ Versus forced software GL under Xvfb/llvmpipe: **-57%** warm first-frame (`74.3 
 
 ---
 
-## Binary Sizes (`v0.14.7`)
+## WebAssembly (`wasm32-wasi +simd128`, Wasmtime 50.0.1)
 
-Unstripped binary sizes measured with Zig 0.17.0 on `v0.14.7` (plus documented Android APK baseline from [docs/android.md](android.md)):
+Measured headlessly via `tools/web/bench.zig` (`800×600 @ 1×`, 4 warm-up + 60 measured frames, `ReleaseFast`) on a 16-core ARM Neoverse-N2 (`aarch64-linux-gnu`) comparing `zig 0.17.1` (`-fllvm`, with and without `+simd128`) and `wazig 0.17.1-wazig.1` (`-fno-llvm +simd128`). All three builds produce **100% bit-identical FNV-1a `u64` pixel hashes** on every scene; browser builds render on the GPU via WebGPU / WebGL2, while `bench.zig` stresses `ui.Tester` + `src/ui/text_tt.zig` + `src/ui/raster.zig` in Wasm. See [`tools/web/MEASUREMENTS.md`](../tools/web/MEASUREMENTS.md) for `ReleaseSmall` and compile-time tables.
+
+```sh
+zig build run-web-bench -- --frames=60 --warmup=4
+python3 tools/wazig/build.py run-web-bench -- --frames=60 --warmup=4
+```
+
+| scene | `wazig -fno-llvm +simd128` (ui / raster / **total**) | `zig -fllvm +simd128` (ui / raster / **total**) | `zig -fllvm -Dsimd128=false` (**total**) | draw items | FNV-1a pixel hash |
+|---|---:|---:|---:|---:|---|
+| boxes | 0.259 / 46.179 / **46.441 ms** | 0.202 / 47.388 / **47.589 ms** | **78.672 ms** | 1,001 | `56ddfded68de1e25` |
+| text | 0.655 / 3.229 / **3.880 ms** | 0.453 / 3.875 / **4.351 ms** | **4.072 ms** | 1,019 | `66b32adcf93303df` |
+| scroll | 1.401 / 2.529 / **3.929 ms** | 1.015 / 2.894 / **3.916 ms** | **3.808 ms** | 1,691 | `4477de3f7caad919` |
+| list | 0.253 / 1.529 / **1.782 ms** | 0.170 / 3.261 / **3.431 ms** | **1.861 ms** | 932 | `493df0b6a0373c9e` |
+| dashboard | 0.130 / 14.977 / **15.105 ms** | 0.085 / 16.128 / **16.219 ms** | **22.932 ms** | 268 | `38b5db84be713fed` |
+| motion | 0.134 / 3.223 / **3.362 ms** | 0.097 / 3.426 / **3.523 ms** | **3.484 ms** | 184 | `2132efebe1d8df40` |
+
+---
+
+## Binary Sizes (`v0.14.7` + Wasm `+simd128`)
+
+Unstripped binary sizes measured with Zig 0.17.0 on `v0.14.7` (plus documented Android APK baseline from [docs/android.md](android.md) and `wasm32-wasi +simd128` raw / `gzip -9` / `zstd -19` sizes with ~1.58 MB embedded DejaVuSans `.ttf` fonts):
 
 | target | mode | `counter` | `gallery` | `hello` |
 |---|---|---:|---:|---:|
@@ -183,3 +203,7 @@ Unstripped binary sizes measured with Zig 0.17.0 on `v0.14.7` (plus documented A
 | macOS (`aarch64-macos`) | `ReleaseSmall` | 934 KB (933,752 B) | 1.51 MB (1,512,552 B) | 952 KB (952,056 B) |
 | iOS Sim (`aarch64-ios-simulator`) | `ReleaseSmall` | 661 KB (660,720 B) | 874 KB (874,496 B) | 661 KB (660,736 B) |
 | Android (`aarch64-linux-android`, [docs/android.md](android.md)) | `ReleaseSmall` | — | ~730 KB APK | — |
+| Wasm `zig -fllvm +simd128` | `ReleaseSmall` | 2.06 MB (977 KB gz / 759 KB zstd) | 2.38 MB (1.09 MB gz / 858 KB zstd) | — |
+| Wasm `wazig -fno-llvm +simd128` | `ReleaseSmall` | 2.35 MB (1.05 MB gz / 814 KB zstd) | 2.73 MB (1.20 MB gz / 924 KB zstd) | — |
+| Wasm `zig -fllvm +simd128` | `ReleaseFast` | 5.62 MB (2.08 MB gz / 1.67 MB zstd) | 7.17 MB (2.60 MB gz / 2.07 MB zstd) | — |
+| Wasm `wazig -fno-llvm +simd128` | `ReleaseFast` | 2.64 MB (1.16 MB gz / 894 KB zstd) | 3.13 MB (1.35 MB gz / 1.03 MB zstd) | — |

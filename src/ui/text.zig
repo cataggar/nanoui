@@ -48,10 +48,10 @@ pub fn warmCaches(ts: *TextSystem) void {
 /// scrolling and search filtering do not re-allocate glyph slices on steady frames.
 pub fn retainLayouts(_: *TextSystem) void {}
 
-fn cutKey(s: []const u8, style: types.TextStyle, zoom: f32, room: f32, mode: u2) u64 {
+fn cutKey(s: []const u8, style: *const types.TextStyle, zoom: f32, room: f32, mode: u2) u64 {
     const q_room: u64 = @intFromFloat(@round(@max(0, @min(room, 1e6)) * 2.0));
     const extra: u64 = (q_room << 2) | @as(u64, mode) | (@as(u64, @as(u32, @bitCast(zoom))) << 32) ^ 0x5452_554e_4341_5445;
-    return TextSystem.key(s, style, extra);
+    return if (portable) TextSystem.keyPtr(s, style, extra) else TextSystem.key(s, style.*, extra);
 }
 
 // ponytail: 4096-entry flat truncation cache cleared on overflow; upgrade to segmented LRU if >4k distinct cuts/frame.
@@ -148,7 +148,7 @@ pub fn fit(c: *Context, index: u32, w: f32) void {
     const t = &n.content.text;
     if (t.str.len == 0) return;
     const room = w - n.style.padding.horizontal();
-    const k = cutKey(t.str, t.style, c.text.zoom, room, if (t.style.truncate == .middle) 1 else 0);
+    const k = cutKey(t.str, &t.style, c.text.zoom, room, if (t.style.truncate == .middle) 1 else 0);
     if (c.truncates.get(k)) |cut| {
         if (cut.head == fits_head) return;
         if (!rich.styled(t.spans)) {
@@ -180,7 +180,7 @@ pub fn fitLines(c: *Context, index: u32, w: f32) void {
     if (std.mem.trim(u8, t.str[last.end..], " \t\r\n").len == 0) return;
     const sub = t.str[last.start..last.end];
     const room = w - n.style.padding.horizontal();
-    const k = cutKey(sub, t.style, c.text.zoom, room, 2);
+    const k = cutKey(sub, &t.style, c.text.zoom, room, 2);
     const cut = c.truncates.get(k) orelse blk: {
         const lay = c.text.layout(sub, t.style);
         const el = c.text.layout(ellipsis, t.style);

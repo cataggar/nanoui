@@ -202,7 +202,7 @@ test {
     _ = directions;
     _ = kv;
     // The updater is for desktop apps; iOS updates through the App Store.
-    if (builtin.os.tag != .ios) _ = @import("update_portable.zig");
+    if (builtin.os.tag != .ios and builtin.os.tag != .wasi) _ = @import("update_portable.zig");
     // The Windows tray's menu model and callback decoding, platform-free.
     if (builtin.os.tag != .ios) _ = @import("windows/tray_model.zig");
     // The Linux tray's menu tree and its pixels, platform-free too.
@@ -226,6 +226,11 @@ test {
         return;
     }
     if (!mac) {
+        if (builtin.os.tag == .wasi) {
+            _ = @import("menu_accel.zig");
+            _ = @import("web/web.zig");
+            return;
+        }
         inline for (.{
             plat.app,
             plat.window,

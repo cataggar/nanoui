@@ -94,6 +94,7 @@ fn asker(t: *ui.Tester) void {
 }
 
 test "tester: a frame asked for from another thread wakes pump" {
+    if (@import("builtin").single_threaded) return error.SkipZigTest;
     var s: Scene = .{};
     var t: ui.Tester = undefined;
     try t.init(testing.allocator, .init(&s, Scene.view), .{ .width = 300, .height = 200, .scale = 1 });

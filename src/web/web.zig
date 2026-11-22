@@ -9,11 +9,29 @@ const webgpu = @import("../ui/webgpu.zig");
 pub const Renderer = webgpu.Renderer;
 pub const Target = webgpu.Target;
 
-pub extern "nanoui_web" fn request_frame() void;
-pub extern "nanoui_web" fn request_after(ms: f64) void;
-pub extern "nanoui_web" fn now_ms() f64;
-pub extern "nanoui_web" fn clipboard_write(ptr: [*]const u8, len: usize) void;
-extern "nanoui_web" fn run_forever() noreturn;
+const host = if (@import("builtin").is_test) struct {
+    pub fn request_frame() void {}
+    pub fn request_after(_: f64) void {}
+    pub fn now_ms() f64 {
+        return 0;
+    }
+    pub fn clipboard_write(_: [*]const u8, _: usize) void {}
+    pub fn run_forever() noreturn {
+        unreachable;
+    }
+} else struct {
+    pub extern "nanoui_web" fn request_frame() void;
+    pub extern "nanoui_web" fn request_after(ms: f64) void;
+    pub extern "nanoui_web" fn now_ms() f64;
+    pub extern "nanoui_web" fn clipboard_write(ptr: [*]const u8, len: usize) void;
+    pub extern "nanoui_web" fn run_forever() noreturn;
+};
+
+pub const request_frame = host.request_frame;
+pub const request_after = host.request_after;
+pub const now_ms = host.now_ms;
+pub const clipboard_write = host.clipboard_write;
+const run_forever = host.run_forever;
 
 pub var active: ?*Surface = null;
 comptime {
@@ -210,4 +228,54 @@ fn wake(ctx: *anyopaque) void {
 pub fn run() noreturn {
     request_frame();
     run_forever();
+}
+
+test "web surface mounts, handles pointer and IME exports, and snapshots on WASI" {
+    if (@import("builtin").os.tag != .wasi) return error.SkipZigTest;
+    const ext = struct {
+        extern fn nanoui_web_frame(time: f64) u32;
+        extern fn nanoui_web_pointer(kind: u32, x: f32, y: f32, button: u32, mods: u32, clicks: u32) void;
+        extern fn nanoui_web_input_ptr(len: usize) usize;
+        extern fn nanoui_web_ime_set_marked(len: usize, sel_start_utf16: u32, sel_end_utf16: u32) void;
+        extern fn nanoui_web_ime_commit(len: usize) void;
+        extern fn nanoui_web_ime_info(out_ptr: [*]u32) u32;
+        extern fn nanoui_web_snapshot() usize;
+        extern fn nanoui_web_frames() u32;
+        extern fn nanoui_web_destroy() void;
+    };
+    const Demo = struct {
+        buf: ui.TextBuffer = .{},
+        clicks: u32 = 0,
+        fn view(d: *@This(), c: *ui.Context) void {
+            const col = ui.div(c).column().sizeFull().p(8).gap(6);
+            defer col.end();
+            _ = ui.textField(c, &d.buf, .{});
+            if (ui.button(c, "Tap", .{}).clicked) d.clicks += 1;
+        }
+    };
+    var demo: Demo = .{};
+    defer demo.buf.deinit();
+    demo.buf.focus();
+    _ = try mount(.init(&demo, Demo.view), .{ .allocator = std.testing.allocator, .width = 200, .height = 120 });
+    defer ext.nanoui_web_destroy();
+
+    _ = ext.nanoui_web_frame(16);
+    try std.testing.expectEqual(@as(u32, 1), ext.nanoui_web_frames());
+
+    const composing = "かな";
+    const scratch: [*]u8 = @ptrFromInt(ext.nanoui_web_input_ptr(composing.len));
+    @memcpy(scratch[0..composing.len], composing);
+    ext.nanoui_web_ime_set_marked(composing.len, 0, 2);
+    _ = ext.nanoui_web_frame(32);
+    var ime_out: [10]u32 = undefined;
+    try std.testing.expectEqual(@as(u32, 1), ext.nanoui_web_ime_info(&ime_out));
+    try std.testing.expect(ime_out[8] & 4 != 0);
+
+    @memcpy(scratch[0..composing.len], composing);
+    ext.nanoui_web_ime_commit(composing.len);
+    _ = ext.nanoui_web_frame(48);
+    try std.testing.expectEqualStrings("かな", demo.buf.text());
+    ext.nanoui_web_pointer(0, 20, 60, 0, 0, 0);
+    _ = ext.nanoui_web_frame(64);
+    try std.testing.expect(ext.nanoui_web_snapshot() != 0);
 }
