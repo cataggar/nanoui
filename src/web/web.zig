@@ -8,6 +8,8 @@ const frames = @import("../ui/frame.zig");
 const webgpu = @import("../ui/webgpu.zig");
 pub const Renderer = webgpu.Renderer;
 pub const Target = webgpu.Target;
+pub const js = @import("js.zig");
+pub const rpc = @import("rpc.zig");
 
 const host = if (@import("builtin").is_test) struct {
     pub fn request_frame() void {}
@@ -38,11 +40,13 @@ pub const image_cache = @import("image_cache.zig");
 pub const ImageCache = image_cache.ImageCache;
 
 pub var active: ?*Surface = null;
-comptime {
-    _ = @import("exports.zig");
-    _ = @import("exports_input.zig");
-    _ = &image_cache_host.exports.nanoui_web_image_complete;
-}
+const SurfaceExports = struct {
+    comptime {
+        _ = @import("exports.zig");
+        _ = @import("exports_input.zig");
+        _ = &image_cache_host.exports.nanoui_web_image_complete;
+    }
+};
 
 /// Optional fallback fonts shipped with the web examples. Applications may
 /// instead register their own embedded fonts with ui.registerFont.
@@ -176,6 +180,10 @@ pub const Surface = struct {
 
     pub fn deinit(s: *Surface) void {
         if (active == s) active = null;
+        if (active == null) {
+            js.wake_hook = null;
+            if (rpc.deinit_hook) |f| f();
+        }
         if (s.frame_log) |*log| log.deinit();
         s.clearPendingInput();
         s.op_strings.deinit(s.gpa);
@@ -194,6 +202,7 @@ pub const Surface = struct {
 /// Mount one view. Its state must outlive the surface; `run` preserves main's
 /// stack by unwinding to JavaScript without running Zig's deferred teardown.
 pub fn mount(view: ui.View, options: Options) !*Surface {
+    _ = SurfaceExports;
     if (active != null) return error.AlreadyMounted;
     const s = try options.allocator.create(Surface);
     errdefer options.allocator.destroy(s);
@@ -213,8 +222,13 @@ pub fn mount(view: ui.View, options: Options) !*Surface {
     s.ctx.waker = .{ .ctx = s, .wake = wake };
     s.ctx.clipboard = .{ .ctx = s, .write = writeClipboard };
     active = s;
+    js.wake_hook = wakeFromJs;
     s.requestFrame();
     return s;
+}
+
+fn wakeFromJs() void {
+    if (active) |s| s.requestFrame();
 }
 
 fn writeClipboard(ctx: ?*anyopaque, text_bytes: []const u8) void {

@@ -75,9 +75,14 @@ const plat = if (!backend.has_platform) struct {} else switch (builtin.os.tag) {
 
 /// Android's entry and panic handler, for an app's library's root
 /// (`android.library` in build.zig makes it).
-const web_fallback = struct {
+const web_fallback = if (builtin.os.tag == .freestanding) struct {
     pub const image_cache = @import("web/image_cache.zig");
     pub const ImageCache = image_cache.ImageCache;
+} else struct {
+    pub const image_cache = @import("web/image_cache.zig");
+    pub const ImageCache = image_cache.ImageCache;
+    pub const js = @import("web/js.zig");
+    pub const rpc = @import("web/rpc.zig");
 };
 pub const web = if (builtin.os.tag == .wasi and !backend.is_embed) @import("web/web.zig") else web_fallback;
 pub const android = if (backend.has_platform and is_android) @import("android/main.zig") else struct {};
@@ -200,6 +205,8 @@ test {
         _ = @import("web/utf16.zig");
         _ = @import("web/image_cache.zig");
         _ = @import("web/image_cache_tests.zig");
+        _ = @import("web/tests_js.zig");
+        _ = @import("web/tests_rpc.zig");
         return;
     }
     _ = tsgen;
@@ -238,6 +245,8 @@ test {
     _ = @import("web/utf16.zig");
     _ = @import("web/image_cache.zig");
     _ = @import("web/image_cache_tests.zig");
+    _ = @import("web/tests_js.zig");
+    _ = @import("web/tests_rpc.zig");
     if (is_android) {
         inline for (.{ plat.app, plat.window, plat.dialog, plat.desktop, plat.fdwatch, @import("android/surface.zig"), @import("android/keys.zig"), @import("android/touch.zig"), @import("android/activity.zig"), @import("android/bars.zig"), @import("android/egl.zig"), @import("android/jni.zig") }) |m| std.testing.refAllDecls(m);
         inline for (.{ plat.app.App, plat.window.Window, plat.desktop.clipboard, plat.desktop.shell, @import("android/surface.zig").Surface }) |T| std.testing.refAllDecls(T);
