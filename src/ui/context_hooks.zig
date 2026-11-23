@@ -403,3 +403,32 @@ pub fn requestClose(c: *Context) void {
     c.close_request = true;
     c.changed = true;
 }
+
+/// Asks for another frame as soon as the display can show it: for
+/// views that animate from `time` every frame.
+pub fn animationFrame(c: *Context) void {
+    c.animating = true;
+}
+
+/// This frame only slid a clip (a sidebar seam). The next display-link
+/// tick may translate the last scene by `dx` instead of rebuilding.
+pub fn clipShift(c: *Context, slot: f32, dx: f32) void {
+    c.retain.clip_shift = true;
+    c.retain.clip_slot = slot;
+    c.retain.clip_dx = dx;
+    c.animating = true;
+}
+
+/// From any thread (a decoder's, a worker's): a frame is wanted, drawn
+/// at the display's next refresh. Lock-free; many asks before it runs
+/// are one frame. Not after the window has closed.
+pub fn requestFrameFromAnyThread(c: *const Context) void {
+    if (c.waker) |w| w.wake(w.ctx);
+}
+
+/// Asks for another frame within `seconds`: for what changes now and
+/// then (a spinner's step, a clock's second), without drawing every
+/// refresh in between.
+pub fn frameIn(c: *Context, seconds: f32) void {
+    c.frame_in = if (c.frame_in) |f| @min(f, seconds) else seconds;
+}

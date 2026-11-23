@@ -49,7 +49,7 @@ pub fn store(c: *Context, instances: *std.ArrayList(gpu.Instance)) void {
     rs.scroll_offsets.clearRetainingCapacity();
     // A loader's later tick (`frame_in`) is not a scene change. Treating it
     // as one rebuilds the window on every wheel event.
-    if (rs.virtual_list or c.animating or c.changed) return;
+    if (rs.virtual_list or c.animating or c.changed or c.overlay.hasActive()) return;
     if (cannotRetain(c, 0)) return;
     rs.scroll_scene.clearRetainingCapacity();
     rs.scroll_scene.appendSlice(c.gpa, instances.items) catch return;

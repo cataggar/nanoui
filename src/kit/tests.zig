@@ -269,3 +269,81 @@ test "glass pill buttons: circular SDF, press_scale, Reduce Motion and Reduce Tr
     try testing.expect(fallback.style.background != null);
     try testing.expect(fallback.style.border != null);
 }
+
+test "kit.menu keyboard navigation skips separators/disabled items and outside clicks do not click through" {
+    const OverlayApp = struct {
+        behind_clicks: u32 = 0,
+        menu_open: bool = false,
+        pop_open: bool = false,
+        center_pop_open: bool = false,
+        center_pop_id: u64 = 0,
+        picked: ?usize = null,
+
+        fn view(s: *@This(), c: *ui.Context) void {
+            const root = ui.div(c).column().sizeFull().p(16).gap(12).bg(c.theme.background);
+            defer root.end();
+            if (kit.button(c, "Behind", .{}).clicked) s.behind_clicks += 1;
+            const anchor: ui.Rect = .{ .x = 16, .y = 72, .w = 90, .h = 30 };
+            if (kit.menu(c, "edit-menu", &s.menu_open, anchor, &.{
+                .{ .label = "Cut" },
+                .{ .separator = true },
+                .{ .label = "Paste", .disabled = true },
+                .{ .label = "Select All" },
+            }, .{})) |i| s.picked = i;
+            if (kit.popover(c, "info-pop", &s.pop_open, anchor, .{})) |p| {
+                defer p.end();
+                ui.text(c, "Popover Body", .{});
+            }
+            if (kit.popover(c, "null-anchor-pop", &s.center_pop_open, null, .{
+                .placement = .bottom_start,
+                .width = 120,
+                .gap = 14,
+            })) |p| {
+                defer p.end();
+                s.center_pop_id = p.div.id();
+                ui.text(c, "Null Anchor Pop", .{});
+            }
+        }
+    };
+
+    var s: OverlayApp = .{};
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&s, OverlayApp.view), .{ .width = 420, .height = 320 });
+    defer t.deinit();
+
+    // Down -> "Cut" (0), Down -> skips separator (1) + disabled "Paste" (2) -> "Select All" (3).
+    s.menu_open = true;
+    t.settle(0.5);
+    _ = t.shortcut(.{ .key = ui.Shortcut.down });
+    _ = t.shortcut(.{ .key = ui.Shortcut.down });
+    _ = t.shortcut(.{ .key = ui.Shortcut.up });
+    _ = t.shortcut(.{ .key = ui.Shortcut.down });
+    _ = t.shortcut(.{ .key = ui.Shortcut.enter });
+    t.settle(0.5);
+    try testing.expectEqual(@as(?usize, 3), s.picked);
+    try testing.expect(!s.menu_open);
+
+    // Outside click over "Behind" closes kit.menu and kit.popover without clicking "Behind".
+    const b = t.findText("Behind").?;
+    s.menu_open = true;
+    t.settle(0.5);
+    t.click(b.x + b.w / 2, b.y + b.h / 2);
+    t.settle(0.5);
+    try testing.expect(!s.menu_open and s.behind_clicks == 0);
+
+    s.pop_open = true;
+    t.settle(0.5);
+    t.click(b.x + b.w / 2, b.y + b.h / 2);
+    t.settle(0.5);
+    try testing.expect(!s.pop_open and s.behind_clicks == 0);
+
+    t.click(b.x + b.w / 2, b.y + b.h / 2);
+    try testing.expectEqual(@as(u32, 1), s.behind_clicks);
+
+    // With anchor = null, kit.popover anchors to (W/2, H/2) and honors placement & gap.
+    s.center_pop_open = true;
+    t.settle(0.5);
+    const cr = t.ctx.rects.get(s.center_pop_id).?;
+    try testing.expectApproxEqAbs(@as(f32, 210), cr.x, 0.5);
+    try testing.expectApproxEqAbs(@as(f32, 160 + 14), cr.y, 0.5);
+}
