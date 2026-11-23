@@ -9,7 +9,10 @@ const js_modules = [_][]const u8{
     "external.js",
     "images.js",
     "wasi.js",
+    "js.js",
+    "rpc.js",
     "nanoui.js",
+    "nanoui.d.ts",
     "host.js",
     "input.js",
 };
@@ -58,11 +61,66 @@ pub fn adjustTarget(b: *std.Build, target: std.Build.ResolvedTarget, enable_simd
     return target;
 }
 
+pub const InstallOptions = struct {
+    rpc_schema: ?*std.Build.Module = null,
+    dts_sub_path: ?[]const u8 = null,
+};
+
+/// Creates a lightweight host-target `nanoui` module (`-Dbackend=none`) suitable
+/// for importing inside an `rpc_schema` module passed to `installWithOptions`.
+pub fn hostNanouiModule(b: *std.Build, nanoui_root: std.Build.LazyPath, use_llvm: ?bool) *std.Build.Module {
+    const host = adjustTarget(b, b.graph.host, defaultSimd128(use_llvm));
+    const is_wasi_host = host.result.os.tag == .wasi;
+    const opts = b.addOptions();
+    opts.addOption(bool, "portable", true);
+    opts.addOption(bool, "in_rt", false);
+    opts.addOption([]const u8, "version", "0.0.0");
+    opts.addOption([]const u8, "backend", "none");
+    const mod = b.createModule(.{
+        .root_source_file = nanoui_root.path(b, "src/nanoui.zig"),
+        .target = host,
+        .optimize = .Debug,
+        .single_threaded = if (is_wasi_host) true else null,
+        .link_libc = if (is_wasi_host) true else null,
+    });
+    mod.addOptions("build_options", opts);
+    return mod;
+}
+
+/// Builds a host-target `rpc_schema` module from `schema_source` with `nanoui` imported.
+pub fn schemaModule(
+    b: *std.Build,
+    nanoui_root: std.Build.LazyPath,
+    schema_source: std.Build.LazyPath,
+    use_llvm: ?bool,
+) *std.Build.Module {
+    const host = adjustTarget(b, b.graph.host, defaultSimd128(use_llvm));
+    const is_wasi_host = host.result.os.tag == .wasi;
+    return b.createModule(.{
+        .root_source_file = schema_source,
+        .target = host,
+        .optimize = .Debug,
+        .single_threaded = if (is_wasi_host) true else null,
+        .link_libc = if (is_wasi_host) true else null,
+        .imports = &.{.{ .name = "nanoui", .module = hostNanouiModule(b, nanoui_root, use_llvm) }},
+    });
+}
+
 /// Installs a wasm32-wasi command and its browser ES modules side by side.
 /// Pass the nanoui dependency's root so this works outside nanoui's tree:
 /// `nanoui.web.install(b, exe, dependency.path("."))`.
 /// Both the executable and nanoui modules must be single-threaded wasm32-wasi.
 pub fn install(b: *std.Build, exe: *std.Build.Step.Compile, nanoui_root: std.Build.LazyPath) *std.Build.Step {
+    return installWithOptions(b, exe, nanoui_root, .{});
+}
+
+/// Like `install`, with optional build-time `.d.ts` emission from `opts.rpc_schema`.
+pub fn installWithOptions(
+    b: *std.Build,
+    exe: *std.Build.Step.Compile,
+    nanoui_root: std.Build.LazyPath,
+    opts: InstallOptions,
+) *std.Build.Step {
     const target = exe.root_module.resolved_target.?.result;
     if (target.cpu.arch != .wasm32 or target.os.tag != .wasi) @panic("web.install needs wasm32-wasi");
     exe.rdynamic = true;
@@ -70,6 +128,26 @@ pub fn install(b: *std.Build, exe: *std.Build.Step.Compile, nanoui_root: std.Bui
     for (js_modules) |name| {
         const source = nanoui_root.path(b, b.fmt("src/web/{s}", .{name}));
         output.step.dependOn(&b.addInstallFile(source, b.fmt("web/{s}", .{name})).step);
+    }
+    if (opts.rpc_schema) |schema_mod| {
+        const host = adjustTarget(b, b.graph.host, defaultSimd128(exe.use_llvm));
+        const is_wasi_host = host.result.os.tag == .wasi;
+        const gen_exe = b.addExecutable(.{
+            .name = b.fmt("{s}-dts-gen", .{exe.name}),
+            .root_module = b.createModule(.{
+                .root_source_file = nanoui_root.path(b, "tools/web/dts_gen.zig"),
+                .target = host,
+                .optimize = .Debug,
+                .single_threaded = if (is_wasi_host) true else null,
+                .link_libc = if (is_wasi_host) true else null,
+                .imports = &.{.{ .name = "rpc_schema", .module = schema_mod }},
+            }),
+            .use_llvm = if (is_wasi_host) exe.use_llvm else null,
+        });
+        const run = b.addRunArtifact(gen_exe);
+        const dts_file = run.captureStdOut(.{ .basename = b.fmt("{s}.d.ts", .{exe.name}) });
+        const dest = opts.dts_sub_path orelse b.fmt("web/{s}.d.ts", .{exe.name});
+        output.step.dependOn(&b.addInstallFile(dts_file, dest).step);
     }
     return &output.step;
 }
@@ -116,6 +194,7 @@ fn coreModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.bui
 
 fn addWebCheck(b: *std.Build, target: std.Build.ResolvedTarget, options: *std.Build.Step.Options, use_llvm: ?bool) void {
     const step = b.step("web-check", "Compile the single-threaded wasm32-wasi UI probe (Debug and ReleaseSmall)");
+    const schema_mod = schemaModule(b, b.path("."), b.path("tools/web/rpc_schema.zig"), use_llvm);
     const modes = [_]struct { mode: std.builtin.OptimizeMode, suffix: []const u8 }{
         .{ .mode = .Debug, .suffix = "debug" },
         .{ .mode = .ReleaseSmall, .suffix = "small" },
@@ -161,6 +240,28 @@ fn addWebCheck(b: *std.Build, target: std.Build.ResolvedTarget, options: *std.Bu
         parity.step.dependOn(&demo.step);
         previous = &parity.step;
         step.dependOn(&parity.step);
+        const rpc_root = b.createModule(.{
+            .root_source_file = b.path("tools/web/rpc_check.zig"),
+            .target = target,
+            .optimize = entry.mode,
+            .single_threaded = true,
+            .link_libc = true,
+            .imports = &.{.{ .name = "nanoui", .module = core }},
+        });
+        const rpc_probe = b.addExecutable(.{
+            .name = b.fmt("nanoui-rpc-check-{s}", .{entry.suffix}),
+            .root_module = rpc_root,
+            .use_llvm = use_llvm,
+        });
+        rpc_probe.entry = .disabled;
+        rpc_probe.rdynamic = true;
+        rpc_probe.wasi_exec_model = .reactor;
+        rpc_probe.step.dependOn(&parity.step);
+        previous = &rpc_probe.step;
+        step.dependOn(installWithOptions(b, rpc_probe, b.path("."), .{
+            .rpc_schema = schema_mod,
+            .dts_sub_path = b.fmt("web/nanoui-rpc-check-{s}.d.ts", .{entry.suffix}),
+        }));
     }
 }
 
@@ -189,6 +290,7 @@ fn addWebParity(b: *std.Build, target: std.Build.ResolvedTarget, options: *std.B
 fn addWebDemo(b: *std.Build, target: std.Build.ResolvedTarget, options: *std.Build.Step.Options, optimize: std.builtin.OptimizeMode, use_llvm: ?bool) void {
     const step = b.step("web-demo", "Build the counter canvas demo");
     const core = coreModule(b, target, optimize, options);
+    const demo_schema_mod = schemaModule(b, b.path("."), b.path("tools/web/rpc_schema.zig"), use_llvm);
     const apps = [_]struct { name: []const u8, path: []const u8 }{
         .{ .name = "counter", .path = "examples/counter/main.zig" },
         .{ .name = "gallery", .path = "examples/gallery/main.zig" },
@@ -205,6 +307,20 @@ fn addWebDemo(b: *std.Build, target: std.Build.ResolvedTarget, options: *std.Bui
         const exe = b.addExecutable(.{ .name = app.name, .root_module = root, .use_llvm = use_llvm });
         step.dependOn(install(b, exe, b.path(".")));
     }
+    const rpc_demo_root = b.createModule(.{
+        .root_source_file = b.path("tools/web/rpc_demo.zig"),
+        .target = target,
+        .optimize = optimize,
+        .single_threaded = true,
+        .link_libc = true,
+        .imports = &.{.{ .name = "nanoui", .module = core }},
+    });
+    const rpc_demo_exe = b.addExecutable(.{
+        .name = "rpc-demo",
+        .root_module = rpc_demo_root,
+        .use_llvm = use_llvm,
+    });
+    step.dependOn(installWithOptions(b, rpc_demo_exe, b.path("."), .{ .rpc_schema = demo_schema_mod }));
     for ([_][]const u8{ "index.html", "worker.js" }) |file| {
         step.dependOn(&b.addInstallFile(b.path(b.fmt("src/web/{s}", .{file})), b.fmt("web/{s}", .{file})).step);
     }

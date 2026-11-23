@@ -4,6 +4,7 @@ import { serve } from './serve.mjs';
 import { chromiumOptions } from './browser_options.mjs';
 import { runWebGL2AndInputSuite } from './browser_input.mjs';
 import { runImageCacheSuite } from './browser_images.mjs';
+import { runRpcSuite } from './browser_rpc.mjs';
 const host = await serve();
 const browser = await chromium.launch(chromiumOptions());
 const comparePage = async targetPage => {
@@ -138,5 +139,6 @@ try {
   assert.deepEqual(errors,[]);
   await runWebGL2AndInputSuite(browser, host.url, comparePage);
   await runImageCacheSuite(browser, host.url);
-  console.log('PASS WebGPU + WebGL2 fallback, Worker, keyboard, EditContext/textarea IME, clipboard, and ImageCache');
+  await runRpcSuite(browser, host.url, comparePage);
+  console.log('PASS WebGPU + WebGL2 fallback, Worker, keyboard, EditContext/textarea IME, clipboard, ImageCache, and RPC');
 } finally { await browser.close(); await host.close(); }

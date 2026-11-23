@@ -141,4 +141,49 @@ and a complete App/Window platform remain separate work. Opaque desktop handle
 types let shared app state compile without creating desktop windows in the
 browser.
 
+## JavaScript bridge and typed RPC
+
+`nanoui.web.js` is the low-level generational handle and `Promise` bridge
+(`js.zig` + `js.js`, zero `eval` / `new Function`, CSP `wasm-unsafe-eval`
+clean). Zig reads and mutates JS values (`js.global`, `js.get`, `js.set`,
+`js.invoke`, `js.construct`, `js.bigint`, `js.readString`, `js.readBytes`),
+catches exceptions via `js.lastError`, and awaits JS `Promise`s with
+`js.then` / `js.awaitCallback` and `js.cancel`. Settled `Promise`s and
+dispatched RPC calls automatically wake a mounted `web.Surface` without idle
+polling. Apps that do not touch `web.js` or `web.rpc` link zero `nanoui_js`
+imports.
+
+`nanoui.web.rpc` layers typed Zig ↔ TypeScript services, host imports, and
+events (`rpc.zig` + `rpc.js`, mirroring desktop `App.bind` and `ipc.Event`):
+
+```zig
+const rpc = nanoui.web.rpc;
+pub const Updated = rpc.Event("updated", struct { count: i32 });
+pub const Host = struct { fetchNote: *const fn ([]const u8) ?[]const u8 };
+pub const Schema = rpc.Schema(.{
+    .services = &.{CounterService},
+    .hosts = &.{Host},
+    .events = &.{Updated.web_event},
+});
+pub const dts = Schema.dts;
+```
+
+Bind service instances before `mount` with `try rpc.bind(&svc)`, emit events
+with `try Updated.emit(.{ .count = n })`, and call `runtime.host` methods
+from Zig with `rpc.HostClient(Host).callSync` or `.call`. `rpc.Bytes` maps to
+`Uint8Array` without base64, and `js.Handle` passes opaque JS objects (`unknown`)
+on main-thread runtimes.
+
+Pass `.rpc_schema` to `nanoui.web.installWithOptions` (with
+`nanoui.web.schemaModule`) to emit `<exe>.d.ts` alongside `nanoui.d.ts`:
+
+```js
+import { start, createWorkerRPC } from './nanoui.js';
+const runtime = await start({ canvas, url: './app.wasm', host: { Host: { fetchNote: k => notes.get(k) ?? null } } });
+const out = await runtime.rpc.CounterService.add(1);
+const off = runtime.rpc.onUpdated(ev => console.log(ev.count));
+// OffscreenCanvas Worker (`worker.js`): structured-cloneable args & Uint8Array
+const workerRpc = createWorkerRPC(worker);
+```
+
 See [MEASUREMENTS.md](MEASUREMENTS.md) for verification scope.

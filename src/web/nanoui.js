@@ -3,6 +3,10 @@ import { createWebGL2, getWebGL2Context } from "./webgl2.js";
 import { createWASI } from "./wasi.js";
 import { createHost } from "./host.js";
 import { createImageLoader } from "./images.js";
+import { createJSBridge } from "./js.js";
+import { createRPC, createWorkerRPC } from "./rpc.js";
+
+export { createWorkerRPC };
 
 function isWebGL2Device(dev) {
   return Boolean(
@@ -49,6 +53,7 @@ export async function load({
   format,
   imports = {},
   asyncPipelines = false,
+  host: rpcHost,
 }) {
   if (gpuPref !== "auto" && gpuPref !== "webgpu" && gpuPref !== "webgl2") {
     throw new Error(`Unsupported GPU preference: ${gpuPref}`);
@@ -78,35 +83,49 @@ export async function load({
     instance.exports.nanoui_gpu_done(token, status);
     runtime.onReadback?.(status);
   };
+  const getMemory = () => instance?.exports?.memory;
+  const getExports = () => instance?.exports;
   const gpu = useWebGL2
-    ? createWebGL2({ gl: activeDevice, canvas, memory: () => instance?.exports?.memory, done })
+    ? createWebGL2({ gl: activeDevice, canvas, memory: getMemory, done })
     : createGPU({
         device: activeDevice,
         format: format ?? globalThis.navigator?.gpu?.getPreferredCanvasFormat?.() ?? "bgra8unorm",
         asyncPipelines,
-        memory: () => instance?.exports?.memory,
+        memory: getMemory,
         done,
       });
   const images = createImageLoader({
     gpu,
-    memory: () => instance?.exports?.memory,
-    getExports: () => instance?.exports,
+    memory: getMemory,
+    getExports,
     baseUrl: baseUrl ?? (typeof location !== "undefined" ? location.href : undefined),
     maxConcurrent: imageConcurrency,
+  });
+
+  const js = createJSBridge(getMemory, getExports);
+  const rpc = createRPC({
+    js,
+    memory: getMemory,
+    exports: getExports,
+    host: rpcHost,
   });
 
   try {
     const response = await fetch(url);
     if (!response.ok) throw new Error(`Loading wasm: HTTP ${response.status}`);
     ({ instance } = await WebAssembly.instantiate(await response.arrayBuffer(), {
-      wasi_snapshot_preview1: createWASI(() => instance.exports.memory),
+      wasi_snapshot_preview1: createWASI(getMemory),
       nanoui_gpu: gpu.imports,
       nanoui_images: images.imports,
+      nanoui_js: js.imports,
       ...imports,
     }));
     instance.exports._initialize?.();
+    rpc.attach();
   } catch (error) {
     images.dispose();
+    try { rpc.destroy(); } catch {}
+    try { js.destroy(); } catch {}
     gpu.dispose();
     if (ownsDevice && !useWebGL2) activeDevice.destroy();
     throw error;
@@ -118,8 +137,12 @@ export async function load({
     exports: instance.exports,
     gpu,
     images,
+    js,
+    rpc,
     destroy() {
       images.dispose();
+      rpc.destroy();
+      js.destroy();
       gpu.dispose();
       if (ownsDevice && !useWebGL2) activeDevice.destroy();
     },
@@ -187,9 +210,11 @@ export async function start(options) {
       format,
       imports: { ...options.imports, nanoui_web: host.imports },
     });
+    runtime.js.setWake(() => host.imports.request_frame());
     host.attach(runtime);
     try { runtime.exports._start(); }
     catch (error) { if (error !== host.unwind) throw error; }
+    runtime.rpc.attach();
     await runtime.gpu.ready();
     host.listen();
     return Object.assign(runtime, {
@@ -198,12 +223,16 @@ export async function start(options) {
       requestFrame: () => host.requestFrame(),
       destroy() {
         runtime.images?.dispose?.();
+        runtime.rpc.destroy();
         host.destroy();
+        runtime.js.destroy();
       },
     });
   } catch (error) {
     runtime?.images?.dispose?.();
+    runtime?.rpc?.destroy();
     host.destroy();
+    runtime?.js?.destroy();
     if (!runtime && ownsDevice && !useWebGL2 && device) device.destroy();
     throw error;
   }

@@ -161,6 +161,9 @@ src/android/          NativeActivity backend: the activity and the app's thread 
                       insets, desktop, dialogs (AlertDialog), fd watches, Zig std's
                       workarounds for bionic (sigaction, lookup)
 src/menu_accel.zig    menus as accelerators (Linux, Windows, iOS, Android)
+src/web/              wasm32-wasi browser target: Surface (web.zig), WebGPU/WebGL2 (webgpu.js,
+                      webgl2.js), JS handle/Promise bridge (js.zig, js.js), typed RPC (rpc.zig,
+                      rpc.js), runtime and Worker entry (nanoui.js, worker.js, nanoui.d.ts)
 src/kit/              nanoui.kit: components after GPUI Kit (buttons, overlays, tabs, forms)
 tools/*.Dockerfile    Linux (GTK, Xvfb) and Windows (Wine) test images
 tools/ios/            app bundles (bundle.zig, finish.sh, check-bundle.sh), the Simulator (sim.sh), Zig's lib fixed (zig-lib.sh)
