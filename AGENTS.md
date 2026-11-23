@@ -105,6 +105,8 @@ src/backend.zig       compile-time backend selector (-Dbackend=auto|none|metal|d
 src/ui/contract.zig   render packet ABI (192-byte Instance), FrameOutput, DirtyRect, pass-barrier iterator
 src/ui/embed.zig      windowless zero-dependency Host (ui.embed) and pass encoders (embed_pass, metal_embed)
 src/ui/widgets.zig    boxes, text, icons, buttons, toggles, sliders, …
+src/ui/popover.zig    anchored popovers, floating panels, placement and scrims
+src/ui/menu_popup.zig immediate-mode popup and dropdown menus, keyboard nav
 src/ui/div.zig        GPUI-style elements: ui.div(c).row().gap(8)…
 src/ui/list.zig       virtualized list (GPUI's uniform_list)
 src/ui/textfield.zig  the text field: selection, composition, clipboard

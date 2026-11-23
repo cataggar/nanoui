@@ -4,6 +4,8 @@
 //! Each comes and goes with `ui.motion` presence.
 const std = @import("std");
 const ui = @import("../ui/ui.zig");
+const popover_mod = @import("../ui/popover.zig");
+const menu_popup = @import("../ui/menu_popup.zig");
 const kit = @import("kit.zig");
 const motion = ui.motion;
 
@@ -11,52 +13,12 @@ const motion = ui.motion;
 pub const layer_popover = 20;
 pub const layer_tooltip = 30;
 
-pub const Placement = enum { bottom_start, bottom, bottom_end, top_start, top, top_end, left, right };
+pub const Placement = ui.Placement;
 
 /// Where a panel `size` goes beside `anchor` at `placement`, turned to the
 /// other side and kept in the window when it would leave it.
 pub fn place(c: *ui.Context, anchor: ui.Rect, size: ui.Size, placement: Placement, gap: f32) ui.Point {
-    var p = placement;
-    const W = c.size.w;
-    const H = c.size.h;
-    // The other side when this one hasn't room and that one has.
-    switch (p) {
-        .bottom_start, .bottom, .bottom_end => if (anchor.y + anchor.h + gap + size.h > H and anchor.y - gap - size.h >= 0) {
-            p = switch (p) {
-                .bottom_start => .top_start,
-                .bottom => .top,
-                else => .top_end,
-            };
-        },
-        .top_start, .top, .top_end => if (anchor.y - gap - size.h < 0 and anchor.y + anchor.h + gap + size.h <= H) {
-            p = switch (p) {
-                .top_start => .bottom_start,
-                .top => .bottom,
-                else => .bottom_end,
-            };
-        },
-        .left => if (anchor.x - gap - size.w < 0) {
-            p = .right;
-        },
-        .right => if (anchor.x + anchor.w + gap + size.w > W) {
-            p = .left;
-        },
-    }
-    var x: f32 = switch (p) {
-        .bottom_start, .top_start => anchor.x,
-        .bottom, .top => anchor.x + (anchor.w - size.w) / 2,
-        .bottom_end, .top_end => anchor.x + anchor.w - size.w,
-        .left => anchor.x - gap - size.w,
-        .right => anchor.x + anchor.w + gap,
-    };
-    var y: f32 = switch (p) {
-        .bottom_start, .bottom, .bottom_end => anchor.y + anchor.h + gap,
-        .top_start, .top, .top_end => anchor.y - gap - size.h,
-        .left, .right => anchor.y + (anchor.h - size.h) / 2,
-    };
-    x = std.math.clamp(x, 6, @max(6, W - size.w - 6));
-    y = std.math.clamp(y, 6, @max(6, H - size.h - 6));
-    return .{ .x = x, .y = y };
+    return ui.placeBounds(.{ .x = 0, .y = 0, .w = c.size.w, .h = c.size.h }, anchor, size, placement, gap, 6);
 }
 
 /// A label that appears over `trigger` once the pointer has rested on it
@@ -97,34 +59,44 @@ pub const Popover = struct {
     }
 };
 
-/// A panel by `anchor` while `open.*`: Escape or a click outside it (and
-/// outside the anchor) sets `open.*` false; it fades out from there.
+/// A panel by `anchor` while `open.*`: Escape or a click outside it sets
+/// `open.*` false; it fades out from there.
 pub fn popover(c: *ui.Context, id: []const u8, open: *bool, anchor: ?ui.Rect, opts: PopoverOptions) ?Popover {
     const t = kit.tokens(c);
-    const a = anchor orelse ui.Rect{ .x = c.size.w / 2, .y = c.size.h / 2, .w = 0, .h = 0 };
     c.next_key = id;
     const panel_id = c.peekId(null);
     c.next_key = null;
+    if (c.overlay.takeDismissed(panel_id)) {
+        open.* = false;
+        c.changed = true;
+    }
     if (open.* and opts.dismissable) {
-        const inside = c.hot == panel_id or std.mem.indexOfScalar(u64, c.hot_path.items, panel_id) != null;
-        const on_anchor = a.contains(c.input.mouse);
-        if ((c.input.pressed and !inside and !on_anchor) or c.shortcut(.{ .key = ui.Shortcut.escape })) {
-            open.* = false;
-            c.changed = true;
-        }
+        c.overlay.offerEscape(panel_id, layer_popover);
+        _ = popover_mod.outsideScrim(c, c.print("kit:scrim:{s}", .{id}), popover_mod.layer_popover_scrim, open);
     }
     const f = motion.present(c, id, open.*, .{
         .initial = .{ .opacity = 0, .scale = 0.97, .y = -4 },
         .exit = .{ .opacity = 0, .scale = 0.98 },
         .transition = .{ .spring = motion.Spring.snappy },
     }) orelse return null;
-    const size = if (c.rects.get(panel_id)) |r| ui.Size{ .w = r.w, .h = r.h } else ui.Size{ .w = opts.width orelse 220, .h = 120 };
-    const at = place(c, a, size, opts.placement, opts.gap);
-    var d = ui.div(c).fixed().offset(at.x, at.y).layer(layer_popover).column().gap(2).p(opts.padding).rounded(t.radius + 2).shadow(.{ .color = t.shadow.alpha(0.9), .blur = 24, .y = 8 });
+    const bounds = popover_mod.viewportBounds(c);
+    const max_h = @max(48, bounds.h - 12);
+    c.next_key = id;
+    var d = ui.div(c).fixed().offset(0, 0).layer(layer_popover).column().gap(2).p(opts.padding).maxH(max_h).scrollY().rounded(t.radius + 2).shadow(.{ .color = t.shadow.alpha(0.9), .blur = 24, .y = 8 });
     d = if (opts.glass) d.rounded(t.radius + 8).glass(.{}) else d.bg(t.popover).border(t.border);
     if (opts.width) |w| d = d.w(w);
-    // It takes the pointer (and so its clicks aren't "outside").
-    _ = d.interaction();
+    if (open.*) {
+        _ = popover_mod.absorbPointer(d);
+        c.overlay.noteLayer(c.gpa, panel_id, layer_popover);
+    }
+    const anc: ui.Anchor = if (anchor) |r| ui.Anchor.fromRect(r) else ui.Anchor.fromPoint(.{ .x = c.size.w / 2, .y = c.size.h / 2 });
+    c.overlay.deferArrange(c.gpa, .{
+        .node_index = d.index,
+        .anchor = anc,
+        .placement = opts.placement,
+        .gap = opts.gap,
+        .margin = 6,
+    });
     return .{ .div = d.motion(f) };
 }
 
@@ -141,12 +113,48 @@ pub const MenuItem = struct {
     separator: bool = false,
 };
 
+const KitMenuState = struct {
+    hot: i16 = -1,
+    was_open: bool = false,
+};
+
 /// A menu by `anchor` while `open.*`; the index of the item chosen (and
 /// then it closes).
 pub fn menu(c: *ui.Context, id: []const u8, open: *bool, anchor: ?ui.Rect, items: []const MenuItem, opts: struct { placement: Placement = .bottom_start, width: f32 = 220, glass: bool = false }) ?usize {
     const t = kit.tokens(c);
-    const p = popover(c, id, open, anchor, .{ .placement = opts.placement, .width = opts.width, .padding = if (opts.glass) 7 else 5, .glass = opts.glass }) orelse return null;
+    const saved_key = c.next_key;
+    c.next_key = id;
+    const st = c.state(KitMenuState, c.print("kit:menu:{s}", .{id}));
+    c.next_key = saved_key;
+    const p = popover(c, id, open, anchor, .{ .placement = opts.placement, .width = opts.width, .padding = if (opts.glass) 7 else 5, .glass = opts.glass }) orelse {
+        st.was_open = false;
+        st.hot = -1;
+        return null;
+    };
     defer p.end();
+    const live = open.*;
+    if (live and !st.was_open) {
+        st.was_open = true;
+        st.hot = -1;
+    } else if (!live) {
+        st.was_open = false;
+        st.hot = -1;
+    }
+    const enabled = c.alloc().alloc(bool, items.len) catch @panic("OOM");
+    for (items, 0..) |it, i| {
+        enabled[i] = !it.separator and !it.disabled;
+    }
+    var nav_activate: ?usize = null;
+    if (live) {
+        const nav = menu_popup.stepMenuKeyboard(c, st.hot, enabled);
+        st.hot = @intCast(nav.index);
+        if (nav.moved) {
+            c.keyboard_modality = true;
+            c.changed = true;
+        }
+        if (nav.activate and nav.index >= 0) nav_activate = @intCast(nav.index);
+        if (!c.keyboard_modality) st.hot = -1;
+    }
     var chosen: ?usize = null;
     const checks = for (items) |it| {
         if (it.checked != null) break true;
@@ -160,10 +168,22 @@ pub fn menu(c: *ui.Context, id: []const u8, open: *bool, anchor: ?ui.Rect, items
             continue;
         }
         const row = ui.div(c).row().wFull().gap(8).px(8).h(30).itemsCenter().rounded(t.radius - 2).control();
-        const ix = row.interaction();
-        const live = !it.disabled;
-        if (live and ix.hovered) c.node(row.index).style.background = if (it.danger) t.danger.alpha(0.12) else t.surface_hover;
-        if (!live) c.node(row.index).style.opacity = 0.45;
+        const ix: ui.Interaction = if (live) blk: {
+            const inter = row.interaction();
+            c.addA11y(row.index, .button, it.label, it.shortcut, it.checked orelse false, !it.disabled);
+            break :blk inter;
+        } else .{
+            .id = c.node(row.index).id,
+            .rect = null,
+            .hovered = false,
+            .pressed = false,
+            .clicked = false,
+            .focused = false,
+        };
+        if (live and !it.disabled and !c.keyboard_modality and ix.hovered) st.hot = @intCast(i);
+        const is_hot = live and !it.disabled and (st.hot == @as(i16, @intCast(i)) or (!c.keyboard_modality and ix.hovered));
+        if (is_hot) c.node(row.index).style.background = if (it.danger) t.danger.alpha(0.12) else t.surface_hover;
+        if (it.disabled) c.node(row.index).style.opacity = 0.45;
         defer row.end();
         const fg = if (it.danger) t.danger else t.foreground;
         if (checks) {
@@ -175,10 +195,15 @@ pub fn menu(c: *ui.Context, id: []const u8, open: *bool, anchor: ?ui.Rect, items
         ui.text(c, it.label, .{ .size = 13, .color = fg });
         ui.spacer(c);
         if (it.shortcut.len > 0) ui.text(c, it.shortcut, .{ .size = 11.5, .color = t.muted });
-        if (live and ix.clicked) chosen = i;
+        if (live and !it.disabled and (ix.clicked or nav_activate == i)) chosen = i;
+    }
+    if (st.hot >= @as(i16, @intCast(items.len)) or (st.hot >= 0 and !enabled[@intCast(st.hot)])) {
+        st.hot = -1;
     }
     if (chosen != null) {
         open.* = false;
+        st.was_open = false;
+        st.hot = -1;
         c.changed = true;
     }
     return chosen;

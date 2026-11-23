@@ -186,6 +186,7 @@ pub const Context = struct {
     frame_in: ?f32 = null,
     /// Delayed help requested during build, drawn over the completed view.
     tooltip: @import("tooltip.zig").Frame = .{},
+    overlay: @import("popover.zig").Frame = .{},
     copy_done: bool = false,
     /// Set when the view took the offered shortcut: it goes no further.
     shortcut_taken: bool = false,
@@ -334,6 +335,7 @@ pub const Context = struct {
         c.drop_targets.deinit(c.gpa);
         c.truncates.deinit(c.gpa);
         c.retain.deinit(c.gpa);
+        c.overlay.deinit(c.gpa);
     }
 
     /// Memory that lives until the end of the frame, for formatted text.
@@ -371,6 +373,7 @@ pub const Context = struct {
     pub fn begin(c: *Context) void {
         c.noteModality();
         c.tooltip = .{};
+        c.overlay.beginPass();
         c.input.beginKeys();
         if (c.frame == 0 and c.nodes.capacity == 0) hooks.warmMaps(c);
         // Tab moves the focus on, unless a text field has it (it takes Tab).
@@ -547,38 +550,13 @@ pub const Context = struct {
     pub const shortcut = hooks.shortcut;
     pub const state = hooks.state;
     pub const animate = hooks.animate;
-
-    /// Asks for another frame as soon as the display can show it: for
-    /// views that animate from `time` every frame.
-    pub fn animationFrame(c: *Context) void {
-        c.animating = true;
-    }
-
-    /// This frame only slid a clip (a sidebar seam). The next display-link
-    /// tick may translate the last scene by `dx` instead of rebuilding.
-    pub fn clipShift(c: *Context, slot: f32, dx: f32) void {
-        c.retain.clip_shift = true;
-        c.retain.clip_slot = slot;
-        c.retain.clip_dx = dx;
-        c.animating = true;
-    }
-
-    /// From any thread (a decoder's, a worker's): a frame is wanted, drawn
-    /// at the display's next refresh. Lock-free; many asks before it runs
-    /// are one frame. Not after the window has closed.
-    pub fn requestFrameFromAnyThread(c: *const Context) void {
-        if (c.waker) |w| w.wake(w.ctx);
-    }
-
+    pub const animationFrame = hooks.animationFrame;
+    pub const clipShift = hooks.clipShift;
+    pub const requestFrameFromAnyThread = hooks.requestFrameFromAnyThread;
     pub const pointerOverText = hit_mod.pointerOverText;
     pub const capScroll = scroll_mod.capScroll;
     pub const scrollMoved = scroll_mod.scrollMoved;
-    /// Asks for another frame within `seconds`: for what changes now and
-    /// then (a spinner's step, a clock's second), without drawing every
-    /// refresh in between.
-    pub fn frameIn(c: *Context, seconds: f32) void {
-        c.frame_in = if (c.frame_in) |f| @min(f, seconds) else seconds;
-    }
+    pub const frameIn = hooks.frameIn;
 
     pub const addHit = hooks.addHit;
     const hit_mod = @import("context_hits.zig");

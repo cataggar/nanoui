@@ -60,11 +60,13 @@ pub fn run(c: *Context, view: View, ts: *text.TextSystem, instances: *std.ArrayL
         c.copy_requested = true;
     };
     @import("scroll_x.zig").takeScrollX(c);
+    c.overlay.resetFrame();
     c.begin();
     var passes: u32 = 0;
     while (true) : (passes += 1) {
         view.build(view.ptr, c);
         @import("tooltip.zig").flush(c);
+        @import("popover.zig").flushInput(c);
         if (c.stack.items.len != 1)
             std.debug.panic("nanoui: {d} box(es) left open: every column, row, card, scroll and pressable needs an end", .{c.stack.items.len - 1});
         if ((!c.changed and !c.input.pendingKeys()) or passes >= 3) break;
@@ -78,6 +80,7 @@ pub fn run(c: *Context, view: View, ts: *text.TextSystem, instances: *std.ArrayL
     c.scroll_moved.clearRetainingCapacity();
     _ = layout.measure(c, 0, size.w);
     layout.arrange(c, 0, .{ .w = size.w, .h = size.h });
+    @import("popover.zig").arrangeAnchored(c);
     if (c.pixel_snap) layout.snapToPixels(c);
     std.mem.swap(std.AutoHashMapUnmanaged(u64, types.Rect), &c.prev_rects, &c.rects);
     c.rects.clearRetainingCapacity();
