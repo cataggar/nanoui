@@ -84,6 +84,7 @@ pub const Gallery = struct {
     palette: @import("palette.zig").Palette = .{},
     windows: @import("windows.zig").Demo = .{},
     foundations: @import("foundations.zig").Demo = .{},
+    grid_demo: @import("grid.zig").Demo = .{},
     components: @import("components.zig").State = .{},
     sidebar: sidebar.State = .{},
     /// The page the sidebar last revealed, so a jump to another (the
@@ -183,6 +184,7 @@ pub const Gallery = struct {
         }
         if (g.page == catalog.colors) return g.foundations.colors(c);
         if (g.page == catalog.icons) return g.foundations.icons(c, if (phone.compact(c)) 0 else sidebar.width);
+        if (g.page == catalog.grid) return g.grid_demo.view(c);
         if (catalog.component(g.page)) |comp| return @import("components.zig").view(&g.components, c, comp);
         ui.scroll(c, .{ .grow = 1, .width = .fill, .height = .fill, .padding = .all(if (phone.compact(c)) 24 else 28), .gap = 20 });
         defer ui.end(c);

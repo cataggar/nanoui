@@ -124,15 +124,25 @@ fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip_
         .w = clip.w,
         .h = clip.h + skirt * 2,
     };
-    const painted = r.intersect(skirt_clip);
     const total_opacity = opacity_in * st.opacity;
     if (total_opacity <= 0.001) return;
+    // Where the layout put it, scrolling aside: a scroll isn't a move.
+    const proj: [4]f32 = if (st.layout_motion != 0)
+        @import("motion/layout.zig").project(c, st.layout_motion, .{ .x = r.x, .y = r.y + scrolled, .w = r.w, .h = r.h })
+    else
+        .{ 0, 0, 0, 0 };
+    const gliding = @abs(proj[0]) > 0.01 or @abs(proj[1]) > 0.01 or @abs(proj[2]) > 0.01 or @abs(proj[3]) > 0.01;
+    const box_r: types.Rect = .{ .x = r.x, .y = r.y, .w = @max(0, r.w + proj[2]), .h = @max(0, r.h + proj[3]) };
+    const unshifted_clip: types.Rect = .{ .x = clip.x - proj[0], .y = clip.y - proj[1], .w = clip.w, .h = clip.h };
+    const unshifted_skirt: types.Rect = .{ .x = skirt_clip.x - proj[0], .y = skirt_clip.y - proj[1], .w = skirt_clip.w, .h = skirt_clip.h };
+    const painted = box_r.intersect(unshifted_skirt);
+    const hit_painted = r.intersect(skirt_clip);
     const open_group = st.group and total_opacity < 0.999 and !c.painting_group;
     const opacity = if (open_group) 1.0 else total_opacity;
     var group_rect: [4]f32 = .{ 0, 0, 0, 0 };
     if (open_group) {
         c.painting_group = true;
-        const grown: types.Rect = .{ .x = r.x - 64, .y = r.y - 64, .w = r.w + 128, .h = r.h + 128 };
+        const grown: types.Rect = .{ .x = box_r.x - 64, .y = box_r.y - 64, .w = box_r.w + 128, .h = box_r.h + 128 };
         const gr = grown.intersect(clip);
         group_rect = .{ gr.x, gr.y, gr.w, gr.h };
         push(c, out, .{
@@ -152,23 +162,23 @@ fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip_
         });
     };
     const clip4 = metal.clip4(clip);
-    const moving = blk: {
+    const moving = gliding or blk: {
         if (!c.animating) break :blk false;
         const prev = c.prev_rects.get(n.id) orelse break :blk false;
         break :blk @abs(r.x - prev.x) > 0.01 or @abs(r.y - prev.y) > 0.01 or @abs(r.w - prev.w) > 0.01 or @abs(r.h - prev.h) > 0.01;
     };
-    const sx0 = if (moving) r.x else snap(r.x, c.scale);
-    const sy0 = if (moving) r.y else snap(r.y, c.scale);
-    const sw = if (moving) r.w else snap(r.w, c.scale);
-    const sh_h = if (moving) r.h else snap(r.h, c.scale);
+    const sx0 = if (moving) box_r.x else snap(box_r.x, c.scale);
+    const sy0 = if (moving) box_r.y else snap(box_r.y, c.scale);
+    const sw = if (moving) box_r.w else snap(box_r.w, c.scale);
+    const sh_h = if (moving) box_r.h else snap(box_r.h, c.scale);
     const rect4: [4]f32 = .{ sx0, sy0, sw, sh_h };
     const rad: f32 = if (st.corner_circular) -st.radius else st.radius;
     // What the box and its subtree emit, for `Style.scale`.
     const start = out.items.len;
 
     if (painted.w > 0 and painted.h > 0) {
-        if (st.shadow) |sh| paintShadow(c, out, sh, r, rad, opacity, clip4);
-        for (st.shadows) |sh| paintShadow(c, out, sh, r, rad, opacity, clip4);
+        if (st.shadow) |sh| paintShadow(c, out, sh, box_r, rad, opacity, clip4);
+        for (st.shadows) |sh| paintShadow(c, out, sh, box_r, rad, opacity, clip4);
         // Glass takes the background's place.
         const fill: ?types.Color = if (st.glass != null) null else st.background;
         if (st.glass) |g| push(c, out, glass.instance(glass.material(g, rect4[2], rect4[3], c.theme.dark, c.scale), rect4, st.radius, clip4, opacity));
@@ -225,20 +235,21 @@ fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip_
                 .xf = if (std.mem.eql(f32, &tx.affine, &.{ 0, 0, 0, 0 })) .{ 0, 0, 0, 0 } else .{ st.rotation, st.spin, r.x + r.w * st.rotation_anchor.x, r.y + r.h * st.rotation_anchor.y },
             }),
             .hole => |radius| push(c, out, .{ .rect = rect4, .color = .{ 0, 0, 0, 1 }, .radius = radius, .kind = metal.Kind.hole, .clip = clip4 }),
-            .canvas => |cv| paintCanvas(c, out, cv, r, visible, clip4, metal.clip4(painted), opacity),
+            .canvas => |cv| paintCanvas(c, out, cv, r, if (gliding) r.intersect(unshifted_clip) else visible, clip4, metal.clip4(r.intersect(unshifted_skirt)), opacity),
             .none => {},
         }
     }
-    if (n.interactive and painted.w > 0 and painted.h > 0) c.addHit(n.id, index, visible, false);
+    if (n.interactive and hit_painted.w > 0 and hit_painted.h > 0) c.addHit(n.id, index, visible, false);
     // Each axis routes through the same clipped, paint-ordered regions.
     if (st.scroll_x and visible.w > 0 and visible.h > 0) c.next_hits.append(c.gpa, .{ .id = n.id, .index = index, .rect = visible, .scroll = false, .scroll_x = true }) catch {};
     // Over the scrolling boxes behind it, never hot itself.
     if (st.wheel and visible.w > 0 and visible.h > 0) c.next_hits.append(c.gpa, .{ .id = n.id, .index = index, .rect = visible, .scroll = true, .wheel = true }) catch {};
 
     var child_clip = clip;
-    if (st.clip or st.scroll_x) child_clip = visible;
+    const clip_box = if (gliding) box_r.intersect(unshifted_clip) else visible;
+    if (st.clip or st.scroll_x) child_clip = clip_box;
     if (st.scroll) {
-        child_clip = visible;
+        child_clip = clip_box;
         c.addHit(n.id, index, visible, true);
     }
     const first = out.items.len;
@@ -263,24 +274,30 @@ fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip_
             .clip = metal.clip4(child_clip),
         });
     }
-    if ((st.clip or st.scroll or st.scroll_x) and st.radius > 0) roundClip(out.items[first..], r, visible, rad, st.clip_corners);
+    if ((st.clip or st.scroll or st.scroll_x) and st.radius > 0) roundClip(out.items[first..], box_r, clip_box, rad, st.clip_corners);
 
     if (st.scroll or st.scroll_x) {
         @import("scroll.zig").paintScrollbars(c, out, n, visible, opacity);
     }
-    if (st.scale != 1) scaleItems(out.items[start..], r, @max(st.scale, 0), st.scale_anchor, clip4);
+    if (st.scale != 1) scaleItems(out.items[start..], box_r, @max(st.scale, 0), st.scale_anchor, clip4);
     if (st.transform) |m| xform.apply(out.items[start..], c.next_hits.items[hits_from..], m, clip_in);
-    if (st.layout_motion != 0) {
-        // Where the layout put it, scrolling aside: a scroll isn't a move.
-        var placed = r;
-        placed.y += scrolled;
-        const d = @import("motion/layout.zig").shift(c, st.layout_motion, placed);
-        if (d[0] != 0 or d[1] != 0) for (out.items[start..]) |*it| {
-            it.rect[0] += d[0];
-            it.rect[1] += d[1];
-            if (!std.mem.eql(f32, &it.clip, &clip4) and it.clip[0] > -1e5) it.clip = .{ it.clip[0] + d[0], it.clip[1] + d[1], it.clip[2] + d[0], it.clip[3] + d[1] };
+    if (proj[0] != 0 or proj[1] != 0) for (out.items[start..]) |*it| {
+        it.rect[0] += proj[0];
+        it.rect[1] += proj[1];
+        if (it.kind == metal.Kind.segment or it.kind == metal.Kind.triangle) {
+            it.uv = .{ it.uv[0] + proj[0], it.uv[1] + proj[1], it.uv[2] + proj[0], it.uv[3] + proj[1] };
+            if (it.kind == metal.Kind.triangle) {
+                it.border_color[0] += proj[0];
+                it.border_color[1] += proj[1];
+            }
+        }
+        if (!std.mem.eql(f32, &it.clip, &clip4) and it.clip[0] > -1e5) it.clip = .{
+            @max(clip4[0], it.clip[0] + proj[0]),
+            @max(clip4[1], it.clip[1] + proj[1]),
+            @min(clip4[2], it.clip[2] + proj[0]),
+            @min(clip4[3], it.clip[3] + proj[1]),
         };
-    }
+    };
 
     if (st.spin != 0) c.time_driven = .fast;
     const pulse = if (c.reduce_motion) null else st.pulse;

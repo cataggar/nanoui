@@ -306,12 +306,18 @@ fn paintOverlayBar(c: *Context, out: *std.ArrayList(metal.Instance), n: *const c
     }) catch {};
 }
 
+pub fn contentHeight(c: *const Context, n: *const ctx_mod.Node) f32 {
+    if (n.first_child == none) return 0;
+    if (n.style.grid != null) return n.rect.h + (c.scroll_max.get(n.id) orelse 0);
+    const first = c.nodes.items[n.first_child].rect;
+    const last = c.nodes.items[n.last_child].rect;
+    return last.y + last.h - first.y + n.style.padding.vertical();
+}
+
 fn paintOverlayScrollbar(c: *Context, out: *std.ArrayList(metal.Instance), n: *const ctx_mod.Node, visible: types.Rect, opacity: f32) void {
     const offset = c.scroll.get(n.id) orelse 0;
     if (n.first_child == none) return;
-    const first = c.node(n.first_child).rect;
-    const last = c.node(n.last_child).rect;
-    const content_h = last.y + last.h - first.y + n.style.padding.vertical();
+    const content_h = contentHeight(c, n);
     const view_h = n.rect.h;
     if (content_h <= view_h + 0.5) return;
     const t = offset / (content_h - view_h);
@@ -320,9 +326,7 @@ fn paintOverlayScrollbar(c: *Context, out: *std.ArrayList(metal.Instance), n: *c
 
 fn paintScrollbar(c: *Context, out: *std.ArrayList(metal.Instance), n: *const ctx_mod.Node, visible: types.Rect, opacity: f32, over_bar: bool) void {
     if (n.first_child == none) return;
-    const first = c.node(n.first_child).rect;
-    const last = c.node(n.last_child).rect;
-    const content_h = last.y + last.h - first.y + n.style.padding.vertical();
+    const content_h = contentHeight(c, n);
     const view_h = n.rect.h;
     if (content_h <= view_h + 0.5) return;
     const offset = c.scroll.get(n.id) orelse 0;

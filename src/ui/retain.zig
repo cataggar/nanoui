@@ -158,9 +158,7 @@ fn shiftTree(c: *Context, index: u32, dy: f32) void {
 fn placeThumb(c: *Context, instances: *std.ArrayList(gpu.Instance), index: u32, view: types.Rect, offset: f32) void {
     const n = c.node(index);
     if (n.first_child == none) return;
-    const first = c.node(n.first_child).rect;
-    const last = c.node(n.last_child).rect;
-    const content_h = last.y + last.h - first.y + n.style.padding.vertical();
+    const content_h = @import("scroll.zig").contentHeight(c, n);
     if (content_h <= view.h + 0.5) return;
     const t = std.math.clamp(offset / (content_h - view.h), 0, 1);
     const bar_h = @max(@as(f32, 24), view.h * view.h / content_h);
@@ -232,9 +230,7 @@ fn maxOffset(c: *Context, id: u64, view: types.Rect) f32 {
     const index = scrollIndex(c, id) orelse return 0;
     const n = c.node(index);
     if (n.first_child == none) return 0;
-    const first = c.node(n.first_child).rect;
-    const last = c.node(n.last_child).rect;
-    const content_h = last.y + last.h - first.y + n.style.padding.vertical();
+    const content_h = @import("scroll.zig").contentHeight(c, n);
     return @max(0, content_h - view.h);
 }
 

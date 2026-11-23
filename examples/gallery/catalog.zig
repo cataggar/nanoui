@@ -14,7 +14,8 @@ pub const typography = 2;
 pub const kit_demo = 6;
 pub const colors = demo_count;
 pub const icons = demo_count + 1;
-pub const first_component = demo_count + 2;
+pub const grid = demo_count + 2;
+pub const first_component = demo_count + 3;
 
 pub const Group = enum {
     buttons,
@@ -103,6 +104,7 @@ pub fn component(i: usize) ?Component {
 pub fn slug(buf: []u8, i: usize) []const u8 {
     if (i == colors) return "colors";
     if (i == icons) return "icons";
+    if (i == grid) return "grid";
     if (component(i)) |comp| return comp.id;
     const name = phone.pages[i][0];
     return std.ascii.lowerString(buf[0..name.len], name);

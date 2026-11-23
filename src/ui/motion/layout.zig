@@ -8,21 +8,21 @@ const types = @import("../types.zig");
 const Channel = @import("channel.zig").Channel;
 const Transition = @import("channel.zig").Transition;
 
-/// The offset to draw box `id` at, laid out at `rect` this frame: from
-/// where it was drawn, easing to nothing.
-pub fn shift(c: *Context, id: u64, rect: types.Rect) [2]f32 {
-    const s = c.motion_store.map.getPtr(id) orelse return .{ 0, 0 };
+/// Position and size deltas `(dx, dy, dw, dh)` to draw box `id` at when laid
+/// out at `rect` this frame: starts from its previous rect and eases to zero.
+pub fn project(c: *Context, id: u64, rect: types.Rect) [4]f32 {
+    const s = c.motion_store.map.getPtr(id) orelse return .{ 0, 0, 0, 0 };
     const tr: Transition = if (c.reduced_motion or c.reduce_motion) .instant else s.layout_transition;
     defer s.rect = .{ rect.x, rect.y, rect.w, rect.h };
-    const was = s.rect orelse return .{ 0, 0 };
-    const moved: [2]f32 = .{ was[0] - rect.x, was[1] - rect.y };
-    var out: [2]f32 = undefined;
+    const was = s.rect orelse return .{ 0, 0, 0, 0 };
+    const moved: [4]f32 = .{ was[0] - rect.x, was[1] - rect.y, was[2] - rect.w, was[3] - rect.h };
+    var out: [4]f32 = undefined;
     for (&s.layout, 0..) |*ch, i| {
         if (tr == .instant) {
             // Settle an existing glide even when its destination hasn't moved.
             ch.jump(0);
         } else if (@abs(moved[i]) > 0.01) {
-            // From where it shows now, plus how far the layout moved it.
+            // From where it shows now, plus how far the layout moved/resized it.
             ch.sample(c.time);
             const v = ch.velocity;
             ch.* = .at(ch.value + moved[i]);
@@ -34,6 +34,12 @@ pub fn shift(c: *Context, id: u64, rect: types.Rect) [2]f32 {
         out[i] = @floatCast(ch.value);
     }
     return out;
+}
+
+/// The offset to draw box `id` at, laid out at `rect` this frame.
+pub fn shift(c: *Context, id: u64, rect: types.Rect) [2]f32 {
+    const p = project(c, id, rect);
+    return .{ p[0], p[1] };
 }
 
 test {

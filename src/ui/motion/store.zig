@@ -21,10 +21,10 @@ pub const State = struct {
     /// When its keyframes started, and which keyframes they were.
     clip_start: f64 = 0,
     clip_id: u64 = 0,
-    /// Where its box was laid out last, the glide from where it was drawn,
-    /// and how it glides (layout animation).
+    /// Where its box was laid out last, the glide from where/how big it was
+    /// drawn (`dx, dy, dw, dh`), and how it glides (layout animation).
     rect: ?[4]f32 = null,
-    layout: [2]Channel = @splat(.{}),
+    layout: [4]Channel = @splat(.{}),
     layout_transition: Transition = .default,
     /// Drag: the pointer is moving it, and where the grab and the last
     /// sample were, so a release can keep its speed and snap.

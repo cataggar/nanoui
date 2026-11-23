@@ -223,6 +223,15 @@ test "the foundations list the theme's colors and filter the icons" {
     t.settle(2);
     try testing.expect(t.hasText("chevron.down"));
     try testing.expect(!t.hasText("trash"));
+
+    try t.clickText("Grid");
+    t.settle(2);
+    try testing.expectEqual(catalog.grid, g.page);
+    try testing.expect(t.hasText("Throughput"));
+    try t.clickText("Span 2×2");
+    try testing.expect(t.ctx.animating);
+    t.settle(3);
+    try testing.expect(!t.ctx.animating and t.ctx.frame_in == null);
 }
 
 fn c_count(_: *Gallery) []const u8 {

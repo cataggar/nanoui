@@ -27,15 +27,80 @@ pub const Div = struct {
         return d;
     }
 
-    // Direction and spacing.
+    fn ensureGrid(d: Div) *types.Grid {
+        const s = d.style();
+        const g = d.c.alloc().create(types.Grid) catch unreachable;
+        g.* = if (s.grid) |prev| prev.* else .{};
+        s.grid = g;
+        return g;
+    }
+
+    // Direction, 2D Grid, and spacing.
     pub fn row(d: Div) Div {
         return d.set("direction", .row);
     }
     pub fn column(d: Div) Div {
         return d.set("direction", .column);
     }
+    /// Lays out children on a 2D track grid (`cols` and `rows` are copied into
+    /// the frame arena so stack-local track arrays are safe).
+    pub fn grid(d: Div, cols: []const types.Track, rows: []const types.Track) Div {
+        const arena = d.c.alloc();
+        const g = d.ensureGrid();
+        g.cols = if (cols.len > 0) arena.dupe(types.Track, cols) catch unreachable else &.{};
+        g.rows = if (rows.len > 0) arena.dupe(types.Track, rows) catch unreachable else &.{};
+        return d;
+    }
+    /// Sets column tracks of a 2D Grid, leaving row tracks implicit (`.auto`).
+    pub fn gridCols(d: Div, cols: []const types.Track) Div {
+        const g = d.ensureGrid();
+        g.cols = if (cols.len > 0) d.c.alloc().dupe(types.Track, cols) catch unreachable else &.{};
+        return d;
+    }
+    /// Sets row tracks of a 2D Grid.
+    pub fn gridRows(d: Div, rows: []const types.Track) Div {
+        const g = d.ensureGrid();
+        g.rows = if (rows.len > 0) d.c.alloc().dupe(types.Track, rows) catch unreachable else &.{};
+        return d;
+    }
     pub fn gap(d: Div, v: f32) Div {
         return d.set("gap", v);
+    }
+    pub fn rowGap(d: Div, v: f32) Div {
+        d.ensureGrid().row_gap = v;
+        return d;
+    }
+    pub fn colGap(d: Div, v: f32) Div {
+        d.ensureGrid().col_gap = v;
+        return d;
+    }
+    /// Places a child at `(row, col)` spanning `(row_span, col_span)` tracks in a parent `Grid`.
+    pub fn gridArea(d: Div, r: u16, col: u16, row_span: u16, col_span: u16) Div {
+        d.style().grid_area = .{ .row = r, .col = col, .row_span = @max(1, row_span), .col_span = @max(1, col_span) };
+        return d;
+    }
+    /// Places a child at `(row, col)` with 1×1 span (unless modified by `rowSpan`/`colSpan`).
+    pub fn gridCell(d: Div, r: u16, col: u16) Div {
+        const a = &d.style().grid_area;
+        a.row = r;
+        a.col = col;
+        return d;
+    }
+    pub fn gridRow(d: Div, r: u16) Div {
+        d.style().grid_area.row = r;
+        return d;
+    }
+    pub fn gridCol(d: Div, col: u16) Div {
+        d.style().grid_area.col = col;
+        return d;
+    }
+    pub fn rowSpan(d: Div, span: u16) Div {
+        d.style().grid_area.row_span = @max(1, span);
+        return d;
+    }
+    pub fn colSpan(d: Div, span: u16) Div {
+        d.style().grid_area.col_span = @max(1, span);
+        return d;
     }
     pub fn p(d: Div, v: f32) Div {
         return d.set("padding", types.Edges.all(v));
@@ -109,16 +174,25 @@ pub const Div = struct {
 
     // Alignment.
     pub fn itemsStart(d: Div) Div {
+        d.style().align_set = true;
         return d.set("align_items", .start);
     }
     pub fn itemsCenter(d: Div) Div {
+        d.style().align_set = true;
         return d.set("align_items", .center);
     }
     pub fn itemsEnd(d: Div) Div {
+        d.style().align_set = true;
         return d.set("align_items", .end);
     }
     pub fn itemsStretch(d: Div) Div {
+        d.style().align_set = true;
         return d.set("align_items", .stretch);
+    }
+    /// Horizontal cell alignment inside a 2D `Grid` (CSS `justify-items`).
+    pub fn justifyItems(d: Div, v: types.Align) Div {
+        d.ensureGrid().justify_items = v;
+        return d;
     }
     pub fn justifyCenter(d: Div) Div {
         return d.set("justify", .center);
