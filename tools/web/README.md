@@ -82,6 +82,43 @@ the frame is submitted. Ordinary `VideoFrame` sources import directly. Padded
 frames are cropped, and video elements use the normalized copy path to bridge
 decoder backends. Native two-plane formats are not web sources.
 
+### Async URL image cache (`ImageCache`)
+
+`nanoui.web.ImageCache` (also aliased as `ui.ImageCache`) fetches, decodes,
+optionally downscales, and uploads browser images off the render thread via
+`src/web/images.js` (`fetch` + `createImageBitmap` with premultiplied alpha,
+falling back to `HTMLImageElement` for SVG on the main thread, and supporting
+`OffscreenCanvas` Workers via `baseUrl`):
+
+```zig
+var cache = nanoui.web.ImageCache.init(gpa, .{
+    .max_entries = 256,
+    .max_bytes = 64 * 1024 * 1024,
+    .max_concurrent = 6,
+});
+defer cache.deinit();
+
+// Low-level state (`loading | ready: ui.Texture | failed`):
+const state = cache.get(c, url); // or cache.getWith(c, url, .{ .max_width = 256, .max_height = 256 })
+
+// One-call widget with placeholder, smooth fade-in, cover/contain/fill fit, and fallback icon:
+_ = cache.image(c, url, .{ .width = .{ .px = 64 }, .height = .{ .px = 64 }, .fit = .cover });
+```
+
+Entries are bounded by both `max_entries` and `max_bytes`; textures touched in
+the current or previous frame stay pinned across `ui.list` scrolling while
+older unpinned entries evict in LRU order, aborting pending fetches and freeing
+their WebGPU/WebGL2 texture handles. In JavaScript, `runtime.images.putBlob(blob)`
+registers in-memory `Blob`/`File` data as a `"nanoui-blob:..."` URI (`deleteBlob`
+removes it). On WebGPU device loss or WebGL2 context restore
+(`ui.webgpuDeviceGeneration()`), `ImageCache` automatically invalidates stale
+handles and re-requests visible URLs. Keep `ImageCache` at a stable memory
+address once requests are in flight (from its first `get`/`image` call until
+`clear()` or `deinit()`); pass `WidgetOptions.cache_key` when global cache
+identity differs from a widget's sibling `key` or rotating URL. On native
+targets, `ui.Tester`, and Wasmtime, `ImageCache` uses a deterministic headless
+mock host (`mockResolve`, `mockFail`, `mockStats`).
+
 `Surface.before_encode` receives the GPUCommandEncoder's handle as a
 pointer-sized integer; app JS resolves it through the object table.
 `Surface.after_frame` retains its native meaning. `nanoui.web.Renderer` and

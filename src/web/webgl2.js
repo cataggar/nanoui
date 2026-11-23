@@ -54,6 +54,7 @@ export function createWebGL2({ gl, canvas = null, memory, done, generation = 1 }
   const recordUpload = n => { stats.uploads++; stats.uploadBytes += n; frameUploaded += n; };
 
   let vao = null, nearestClampSampler = null, linearClampSampler = null, dummyTex2D = null, canvasTarget = null;
+  let maxTexSize = 4096;
 
   function makeSampler(ctx, filter) {
     const s = ctx.createSampler();
@@ -78,6 +79,7 @@ export function createWebGL2({ gl, canvas = null, memory, done, generation = 1 }
   function initGLState() {
     gl.getExtension?.("EXT_color_buffer_float");
     gl.getExtension?.("OES_texture_float_linear");
+    maxTexSize = (!gl.isContextLost() && gl.getParameter?.(gl.MAX_TEXTURE_SIZE)) || 4096;
     vao = gl.createVertexArray(); gl.bindVertexArray(vao);
     gl.disable(gl.CULL_FACE); gl.disable(gl.DEPTH_TEST); gl.disable(gl.STENCIL_TEST);
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1); gl.pixelStorei(gl.PACK_ALIGNMENT, 1);
@@ -339,6 +341,8 @@ export function createWebGL2({ gl, canvas = null, memory, done, generation = 1 }
     get device() { return gl; },
     get generation() { return generation; },
     get stats() { return stats; },
+    isLost: () => Boolean(!gl || gl.isContextLost()),
+    maxTextureSize: () => maxTexSize,
     onTiming(cb) { onTiming = cb; void onTiming; },
     async ready() { if (diagnostics.length) throw new Error(diagnostics.join("\n")); },
     dispose() { externalSources.destroy(); resizeCanvas = null; destroyInternalGL(gl, !gl.isContextLost()); },
@@ -351,6 +355,49 @@ export function createWebGL2({ gl, canvas = null, memory, done, generation = 1 }
       gl = nextGl; targetCanvas = nextGl.canvas ?? targetCanvas;
       generation++; diagnostics.length = 0; passOps.resetPassState();
       deviceHandle = objects.put(nextGl); initGLState();
+    },
+    async uploadBitmap(bitmap) {
+      const w = bitmap?.width >>> 0, h = bitmap?.height >>> 0;
+      if (!bitmap || !w || !h) return { handle: 0, serial: 0, width: 0, height: 0, stale: false };
+      if (!gl || gl.isContextLost()) return { handle: 0, serial: 0, width: 0, height: 0, stale: true };
+      if (w > maxTexSize || h > maxTexSize) return { handle: 0, serial: 0, width: 0, height: 0, stale: false };
+      for (let i = 0; i < 16; i++) {
+        const prev = gl.getError();
+        if (prev === gl.NO_ERROR) break;
+        diagnostics.push(`WebGL2 error: 0x${prev.toString(16)}`);
+      }
+      const ownerGl = gl, ownerGen = generation;
+      const glTex = gl.createTexture();
+      if (!glTex) return { handle: 0, serial: 0, width: 0, height: 0, stale: gl.isContextLost() };
+      gl.activeTexture(gl.TEXTURE7);
+      gl.bindTexture(gl.TEXTURE_2D, glTex);
+      setup2DParams(gl.LINEAR);
+      gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+      resetUnpack();
+      let thrown = false;
+      try {
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, bitmap);
+      } catch {
+        thrown = true;
+      }
+      gl.bindTexture(gl.TEXTURE_2D, null);
+      const err = gl.getError();
+      if (thrown || err !== gl.NO_ERROR || gl.isContextLost()) {
+        if (!gl.isContextLost()) gl.deleteTexture(glTex);
+        return { handle: 0, serial: 0, width: 0, height: 0, stale: gl.isContextLost() };
+      }
+      recordUpload(w * h * 4);
+      const texObj = {
+        kind: "texture", glTex, fbo: null, fboGl: ownerGl, fboGen: ownerGen,
+        width: w, height: h, depth: 1, dimension: 2,
+        target: gl.TEXTURE_2D, format: "rgba8unorm", formatIndex: 1, srgb: false, borrowed: false,
+        destroy() {
+          if (this.fbo && canDelete(this.fboGl ?? ownerGl, this.fboGen ?? ownerGen)) (this.fboGl ?? ownerGl).deleteFramebuffer(this.fbo);
+          if (this.glTex && canDelete(ownerGl, ownerGen)) ownerGl.deleteTexture(this.glTex);
+        },
+      };
+      const handle = objects.put(texObj, true);
+      return { handle, serial: imports.resource_serial(handle), width: w, height: h, stale: false };
     },
     async check() {
       await this.ready();

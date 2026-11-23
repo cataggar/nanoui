@@ -30,7 +30,12 @@ export function createGPU({ device, memory, done, format = "bgra8unorm", generat
     get size() { return values.length - free.length - 1; },
   };
   let deviceHandle = objects.put(device);
-  let canvasContext, copyExternal = false;
+  let canvasContext, copyExternal = false, deviceLost = false;
+  const watchLost = dev => {
+    deviceLost = false;
+    dev?.lost?.then?.(() => { if (dev === device) deviceLost = true; });
+  };
+  watchLost(device);
   const get = h => objects.get(h);
   const transient = value => { const h = objects.put(value); frame.push(h); return h; };
   const bytes = (ptr, len) => new Uint8Array(memory().buffer, ptr, len);
@@ -178,6 +183,8 @@ export function createGPU({ device, memory, done, format = "bgra8unorm", generat
     get device() { return device; },
     get generation() { return generation; },
     get stats() { return timing.stats; },
+    isLost: () => deviceLost,
+    maxTextureSize: () => device?.limits?.maxTextureDimension2D || 8192,
     onTiming(callback) { onTiming=callback; },
     async ready() { await Promise.all([...compilations,...pipelineJobs]); if(diagnostics.length)throw Error(diagnostics.join("\n")); },
     dispose() { timing.destroy(); externalSources.destroy(); },
@@ -190,8 +197,50 @@ export function createGPU({ device, memory, done, format = "bgra8unorm", generat
       device = next;
       generation++;
       diagnostics.length=0;
+      watchLost(next);
       deviceHandle = objects.put(next);
       next.addEventListener("uncapturederror", event => diagnostics.push(event.error.message));
+    },
+    async uploadBitmap(bitmap) {
+      const w = bitmap?.width >>> 0, h = bitmap?.height >>> 0;
+      if (!bitmap || !w || !h) return { handle: 0, serial: 0, width: 0, height: 0, stale: false };
+      const dev = device, startGen = generation;
+      if (!dev || deviceLost) return { handle: 0, serial: 0, width: 0, height: 0, stale: true };
+      const maxLimit = dev.limits?.maxTextureDimension2D || 8192;
+      if (w > maxLimit || h > maxLimit) return { handle: 0, serial: 0, width: 0, height: 0, stale: false };
+      const usage = typeof GPUTextureUsage !== "undefined"
+        ? (GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT)
+        : 0x16;
+      let tex = null, valScope = null, oomScope = null, failed = false;
+      const hasScopes = typeof dev.pushErrorScope === "function" && typeof dev.popErrorScope === "function";
+      if (hasScopes) {
+        dev.pushErrorScope("out-of-memory");
+        dev.pushErrorScope("validation");
+      }
+      try {
+        tex = dev.createTexture({ size: [w, h, 1], format: "rgba8unorm", usage });
+        dev.queue.copyExternalImageToTexture(
+          { source: bitmap, flipY: false },
+          { texture: tex, premultipliedAlpha: true },
+          [w, h],
+        );
+      } catch {
+        failed = true;
+      } finally {
+        if (hasScopes) {
+          try { valScope = dev.popErrorScope().catch(() => { failed = true; return null; }); } catch { failed = true; }
+          try { oomScope = dev.popErrorScope().catch(() => { failed = true; return null; }); } catch { failed = true; }
+        }
+      }
+      const [valErr, oomErr] = await Promise.all([valScope, oomScope]);
+      const stale = deviceLost || generation !== startGen;
+      if (failed || valErr || oomErr || stale) {
+        try { tex?.destroy?.(); } catch {}
+        return { handle: 0, serial: 0, width: 0, height: 0, stale };
+      }
+      timing.upload(w * h * 4);
+      const handle = objects.put(tex, true);
+      return { handle, serial: imports.resource_serial(handle), width: w, height: h, stale: false };
     },
     async check() {
       await this.ready();

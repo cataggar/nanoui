@@ -7,6 +7,7 @@ const js_modules = [_][]const u8{
     "webgl2.js",
     "webgl2_pass.js",
     "external.js",
+    "images.js",
     "wasi.js",
     "nanoui.js",
     "host.js",
@@ -188,15 +189,20 @@ fn addWebParity(b: *std.Build, target: std.Build.ResolvedTarget, options: *std.B
 fn addWebDemo(b: *std.Build, target: std.Build.ResolvedTarget, options: *std.Build.Step.Options, optimize: std.builtin.OptimizeMode, use_llvm: ?bool) void {
     const step = b.step("web-demo", "Build the counter canvas demo");
     const core = coreModule(b, target, optimize, options);
-    for ([_][]const u8{ "counter", "gallery" }) |name| {
+    const apps = [_]struct { name: []const u8, path: []const u8 }{
+        .{ .name = "counter", .path = "examples/counter/main.zig" },
+        .{ .name = "gallery", .path = "examples/gallery/main.zig" },
+        .{ .name = "images_test", .path = "tools/web/images_app.zig" },
+    };
+    for (apps) |app| {
         const root = b.createModule(.{
-            .root_source_file = b.path(b.fmt("examples/{s}/main.zig", .{name})),
+            .root_source_file = b.path(app.path),
             .target = target,
             .optimize = optimize,
             .single_threaded = true,
             .imports = &.{.{ .name = "nanoui", .module = core }},
         });
-        const exe = b.addExecutable(.{ .name = name, .root_module = root, .use_llvm = use_llvm });
+        const exe = b.addExecutable(.{ .name = app.name, .root_module = root, .use_llvm = use_llvm });
         step.dependOn(install(b, exe, b.path(".")));
     }
     for ([_][]const u8{ "index.html", "worker.js" }) |file| {

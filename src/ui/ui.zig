@@ -198,6 +198,8 @@ pub const pixelBufferTexture = @import("pixel_buffer.zig").texture;
 pub const BeforeEncode = @import("gpu.zig").BeforeEncode;
 pub const webgpuDevice = @import("ui_gpu.zig").webgpuDevice;
 pub const webgpuDeviceGeneration = @import("ui_gpu.zig").webgpuDeviceGeneration;
+pub const image_cache = @import("../web/image_cache.zig");
+pub const ImageCache = image_cache.ImageCache;
 pub const metalDevice = @import("ui_gpu.zig").metalDevice;
 pub const d3d11Device = @import("ui_gpu.zig").d3d11Device;
 pub const d3d11DeviceGeneration = @import("ui_gpu.zig").d3d11DeviceGeneration;
@@ -473,6 +475,7 @@ test {
     _ = @import("layout_grid.zig");
     _ = @import("tests_grid.zig");
     _ = @import("tests_after_frame.zig");
+    _ = image_cache;
     if (!backend.is_embed and os == .macos) {
         _ = @import("tests_menu.zig");
         _ = @import("tests_a11y.zig");

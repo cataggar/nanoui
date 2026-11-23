@@ -75,7 +75,11 @@ const plat = if (!backend.has_platform) struct {} else switch (builtin.os.tag) {
 
 /// Android's entry and panic handler, for an app's library's root
 /// (`android.library` in build.zig makes it).
-pub const web = if (backend.has_platform or builtin.os.tag == .wasi) (if (builtin.os.tag == .wasi and !backend.is_embed) @import("web/web.zig") else struct {}) else struct {};
+const web_fallback = struct {
+    pub const image_cache = @import("web/image_cache.zig");
+    pub const ImageCache = image_cache.ImageCache;
+};
+pub const web = if (builtin.os.tag == .wasi and !backend.is_embed) @import("web/web.zig") else web_fallback;
 pub const android = if (backend.has_platform and is_android) @import("android/main.zig") else struct {};
 
 /// The Objective-C runtime (macOS and iOS).
@@ -194,6 +198,8 @@ test {
         _ = kit;
         std.testing.refAllDecls(kit);
         _ = @import("web/utf16.zig");
+        _ = @import("web/image_cache.zig");
+        _ = @import("web/image_cache_tests.zig");
         return;
     }
     _ = tsgen;
@@ -230,6 +236,8 @@ test {
     _ = @import("linux/renderer.zig");
     // Browser UTF-8 <-> UTF-16 offset conversion for EditContext / IME.
     _ = @import("web/utf16.zig");
+    _ = @import("web/image_cache.zig");
+    _ = @import("web/image_cache_tests.zig");
     if (is_android) {
         inline for (.{ plat.app, plat.window, plat.dialog, plat.desktop, plat.fdwatch, @import("android/surface.zig"), @import("android/keys.zig"), @import("android/touch.zig"), @import("android/activity.zig"), @import("android/bars.zig"), @import("android/egl.zig"), @import("android/jni.zig") }) |m| std.testing.refAllDecls(m);
         inline for (.{ plat.app.App, plat.window.Window, plat.desktop.clipboard, plat.desktop.shell, @import("android/surface.zig").Surface }) |T| std.testing.refAllDecls(T);

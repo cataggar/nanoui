@@ -33,10 +33,15 @@ pub const now_ms = host.now_ms;
 pub const clipboard_write = host.clipboard_write;
 const run_forever = host.run_forever;
 
+const image_cache_host = @import("image_cache_host.zig");
+pub const image_cache = @import("image_cache.zig");
+pub const ImageCache = image_cache.ImageCache;
+
 pub var active: ?*Surface = null;
 comptime {
     _ = @import("exports.zig");
     _ = @import("exports_input.zig");
+    _ = &image_cache_host.exports.nanoui_web_image_complete;
 }
 
 /// Optional fallback fonts shipped with the web examples. Applications may

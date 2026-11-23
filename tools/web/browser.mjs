@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { serve } from './serve.mjs';
 import { chromiumOptions } from './browser_options.mjs';
 import { runWebGL2AndInputSuite } from './browser_input.mjs';
+import { runImageCacheSuite } from './browser_images.mjs';
 const host = await serve();
 const browser = await chromium.launch(chromiumOptions());
 const comparePage = async targetPage => {
@@ -136,5 +137,6 @@ try {
   await low.evaluate(()=>window.nanoui.destroy());await scaleOne.close();
   assert.deepEqual(errors,[]);
   await runWebGL2AndInputSuite(browser, host.url, comparePage);
-  console.log('PASS WebGPU + WebGL2 fallback, Worker, keyboard, EditContext/textarea IME, and clipboard');
+  await runImageCacheSuite(browser, host.url);
+  console.log('PASS WebGPU + WebGL2 fallback, Worker, keyboard, EditContext/textarea IME, clipboard, and ImageCache');
 } finally { await browser.close(); await host.close(); }
