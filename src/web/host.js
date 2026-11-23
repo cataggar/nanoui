@@ -340,6 +340,7 @@ export function createHost(canvasOrOptions, maybeOptions = {}) {
       inputController = null;
       if (canvas?.style) canvas.style.cursor = "";
       for (const off of listeners) off();
+      runtime?.images?.dispose?.();
       runtime?.exports?.nanoui_web_destroy?.();
       context?.unconfigure?.();
       runtime?.gpu?.dispose?.();

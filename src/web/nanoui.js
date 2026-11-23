@@ -2,6 +2,7 @@ import { createGPU } from "./gpu.js";
 import { createWebGL2, getWebGL2Context } from "./webgl2.js";
 import { createWASI } from "./wasi.js";
 import { createHost } from "./host.js";
+import { createImageLoader } from "./images.js";
 
 function isWebGL2Device(dev) {
   return Boolean(
@@ -40,6 +41,8 @@ function createScratchCanvas() {
 // Inject a GPUDevice or WebGL2RenderingContext to share it with a compositor.
 export async function load({
   url,
+  baseUrl,
+  imageConcurrency = 6,
   gpu: gpuPref = "auto",
   canvas,
   device,
@@ -76,14 +79,21 @@ export async function load({
     runtime.onReadback?.(status);
   };
   const gpu = useWebGL2
-    ? createWebGL2({ gl: activeDevice, canvas, memory: () => instance.exports.memory, done })
+    ? createWebGL2({ gl: activeDevice, canvas, memory: () => instance?.exports?.memory, done })
     : createGPU({
         device: activeDevice,
         format: format ?? globalThis.navigator?.gpu?.getPreferredCanvasFormat?.() ?? "bgra8unorm",
         asyncPipelines,
-        memory: () => instance.exports.memory,
+        memory: () => instance?.exports?.memory,
         done,
       });
+  const images = createImageLoader({
+    gpu,
+    memory: () => instance?.exports?.memory,
+    getExports: () => instance?.exports,
+    baseUrl: baseUrl ?? (typeof location !== "undefined" ? location.href : undefined),
+    maxConcurrent: imageConcurrency,
+  });
 
   try {
     const response = await fetch(url);
@@ -91,10 +101,12 @@ export async function load({
     ({ instance } = await WebAssembly.instantiate(await response.arrayBuffer(), {
       wasi_snapshot_preview1: createWASI(() => instance.exports.memory),
       nanoui_gpu: gpu.imports,
+      nanoui_images: images.imports,
       ...imports,
     }));
     instance.exports._initialize?.();
   } catch (error) {
+    images.dispose();
     gpu.dispose();
     if (ownsDevice && !useWebGL2) activeDevice.destroy();
     throw error;
@@ -105,6 +117,12 @@ export async function load({
     instance,
     exports: instance.exports,
     gpu,
+    images,
+    destroy() {
+      images.dispose();
+      gpu.dispose();
+      if (ownsDevice && !useWebGL2) activeDevice.destroy();
+    },
   });
   Object.defineProperty(runtime, "memory", { get: () => instance.exports.memory, enumerable: true, configurable: true });
   Object.defineProperty(runtime, "device", { get: () => gpu.device, enumerable: true, configurable: true });
@@ -156,10 +174,12 @@ export async function start(options) {
     acquireDevice,
   });
 
+  const resolvedBaseUrl = options.baseUrl ?? (typeof document !== "undefined" ? document.baseURI : undefined);
   let runtime;
   try {
     runtime = await load({
       ...options,
+      baseUrl: resolvedBaseUrl,
       gpu: useWebGL2 ? "webgl2" : "webgpu",
       canvas,
       asyncPipelines: !useWebGL2,
@@ -177,10 +197,12 @@ export async function start(options) {
       setDevice: host.setDevice,
       requestFrame: () => host.requestFrame(),
       destroy() {
+        runtime.images?.dispose?.();
         host.destroy();
       },
     });
   } catch (error) {
+    runtime?.images?.dispose?.();
     host.destroy();
     if (!runtime && ownsDevice && !useWebGL2 && device) device.destroy();
     throw error;
