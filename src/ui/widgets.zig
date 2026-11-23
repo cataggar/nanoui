@@ -30,7 +30,18 @@ pub fn row(c: *Context, style: Style) void {
     c.node(i).style.direction = .row;
 }
 
-/// Closes the box `column`, `row`, `card`, `scroll` or `pressable` opened.
+/// Opens a 2D track grid container; close with `ui.end(c)`.
+pub fn grid(c: *Context, cols: []const types.Track, rows: []const types.Track, style: Style) void {
+    const i = c.openPtr(&style, null);
+    const arena = c.alloc();
+    const g = arena.create(types.Grid) catch unreachable;
+    g.* = if (style.grid) |prev| prev.* else .{};
+    g.cols = if (cols.len > 0) arena.dupe(types.Track, cols) catch unreachable else &.{};
+    g.rows = if (rows.len > 0) arena.dupe(types.Track, rows) catch unreachable else &.{};
+    c.node(i).style.grid = g;
+}
+
+/// Closes the box `column`, `row`, `grid`, `card`, `scroll` or `pressable` opened.
 pub fn end(c: *Context) void {
     c.end();
 }

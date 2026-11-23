@@ -106,7 +106,11 @@ pub const Length = union(enum) {
 };
 
 pub const Direction = enum { row, column };
-pub const Align = enum { start, center, end, stretch };
+const grid_types = @import("grid_types.zig");
+pub const Align = grid_types.Align;
+pub const Track = grid_types.Track;
+pub const Grid = grid_types.Grid;
+pub const GridPlacement = grid_types.GridPlacement;
 pub const Justify = enum { start, center, end, space_between };
 /// A font's weight. The names beyond the first four came later and go after
 /// them, so each keeps its number; `TextStyle.css_weight` asks for any other.
@@ -280,6 +284,10 @@ pub const Scrollbar = union(enum) {
 
 pub const Style = struct {
     direction: Direction = .column,
+    /// When non-null, lays out children on a 2D track grid (`layout_grid.zig`).
+    grid: ?*const Grid = null,
+    /// Cell coordinates and track spans when placed inside a parent `Grid`.
+    grid_area: GridPlacement = .{},
     gap: f32 = 0,
     padding: Edges = .{},
     width: Length = .auto,
@@ -425,6 +433,7 @@ pub const Style = struct {
     pulse: ?Pulse = null,
     motion_blur: bool = false,
     group: bool = false,
+    align_set: bool = false,
 };
 
 /// A spring as SwiftUI writes one (`motion.zig`).

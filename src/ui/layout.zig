@@ -71,29 +71,35 @@ pub fn measure(c: *Context, index: u32, avail_w: f32) types.Size {
         // Sized by its style (the widget gives the size).
         .image, .texture, .hole, .canvas => {},
         .none => {
-            var child = n.first_child;
-            var count: f32 = 0;
-            while (child != none) : (child = c.node(child).next) {
-                // A box that scrolls sideways lays its children out at their own widths.
-                const s = measure(c, child, if (st.scroll_x) std.math.inf(f32) else inner_w);
-                if (c.node(child).style.absolute) continue;
-                if (!st.scroll_x) flexible = flexible or c.node(child).flexible;
-                const dir = st.direction;
-                const m = main(dir, s);
-                const x = cross(dir, s);
-                if (dir == .row) {
-                    content.w += m;
-                    content.h = @max(content.h, x);
-                } else {
-                    content.h += m;
-                    content.w = @max(content.w, x);
+            if (st.grid != null) {
+                const res = @import("layout_grid.zig").measure(c, index, inner_w);
+                content = res.size;
+                flexible = res.flexible;
+            } else {
+                var child = n.first_child;
+                var count: f32 = 0;
+                while (child != none) : (child = c.node(child).next) {
+                    // A box that scrolls sideways lays its children out at their own widths.
+                    const s = measure(c, child, if (st.scroll_x) std.math.inf(f32) else inner_w);
+                    if (c.node(child).style.absolute) continue;
+                    if (!st.scroll_x) flexible = flexible or c.node(child).flexible;
+                    const dir = st.direction;
+                    const m = main(dir, s);
+                    const x = cross(dir, s);
+                    if (dir == .row) {
+                        content.w += m;
+                        content.h = @max(content.h, x);
+                    } else {
+                        content.h += m;
+                        content.w = @max(content.w, x);
+                    }
+                    count += 1;
                 }
-                count += 1;
+                if (count > 1) {
+                    if (st.direction == .row) content.w += st.gap * (count - 1) else content.h += st.gap * (count - 1);
+                }
+                if (st.direction == .row and flexible) content.h = fitRow(c, n.first_child, st.gap, inner_w);
             }
-            if (count > 1) {
-                if (st.direction == .row) content.w += st.gap * (count - 1) else content.h += st.gap * (count - 1);
-            }
-            if (st.direction == .row and flexible) content.h = fitRow(c, n.first_child, st.gap, inner_w);
         },
     }
 
@@ -155,6 +161,7 @@ pub fn arrange(c: *Context, index: u32, rect_in: types.Rect) void {
     if (n.content == .text and n.content.text.style.cuts()) text.fit(c, index, rect.w);
     if (n.content == .text and n.content.text.style.max_lines > 0) text.fitLines(c, index, rect.w);
     if (n.first_child == none) return;
+    if (st.grid != null) return @import("layout_grid.zig").arrange(c, index, rect);
 
     const dir = st.direction;
     const inner = rect.inset(st.padding);

@@ -98,6 +98,7 @@ src/ui/ui.zig         native UI's public API and View
 src/ui/context.zig    per-frame box tree, ids, input, hit testing, animation
 src/ui/input.zig      keys, shortcuts, text operations, one event's input
 src/ui/layout.zig     flexbox: measure, arrange, grow, shrink, absolute, scroll
+src/ui/layout_grid.zig 2D grid: fixed/fr/auto tracks, row/col spans, snapped shared edges
 src/ui/paint.zig      tree → GPU instances, clipping, culling, scrollbars
 src/ui/frame.zig      one frame, shared by windows and the Tester; frame stats
 src/backend.zig       compile-time backend selector (-Dbackend=auto|none|metal|d3d11|opengl|gles|webgpu)

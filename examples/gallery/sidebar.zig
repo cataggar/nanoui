@@ -74,6 +74,7 @@ pub fn view(g: anytype, c: *ui.Context) void {
             .{ catalog.colors, "Colors", "circle.lefthalf.filled" },
             .{ catalog.typography, "Typography", "textformat" },
             .{ catalog.icons, "Icons", "square.grid.3x3" },
+            .{ catalog.grid, "Grid", "square.grid.2x2" },
         }) |f| if (row(c, f[0], f[2], f[1], if (f[0] == catalog.icons) c.print("{d}", .{ui.icons.all.len}) else null, g.page == f[0])) {
             g.page = f[0];
         };

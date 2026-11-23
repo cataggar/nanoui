@@ -13,9 +13,11 @@ c.text.baseline_rule = .glyph_box;
 ```
 
 - `pixel_snap` rounds absolute box edges onto the device pixel grid before
-  paint and hit rectangles are saved. Shared edges stay shared. Half ties
-  round toward zero. `pixel_snap_text` separately controls text measurement;
-  disabling it preserves explicitly requested fractional line heights.
+  paint and hit rectangles are saved. Shared edges stay shared (including
+  cumulative 2D `Grid` track boundaries across `fr` divisions and multi-track
+  `rowSpan` / `colSpan` cells). Half ties round toward zero. `pixel_snap_text`
+  separately controls text measurement; disabling it preserves explicitly
+  requested fractional line heights.
 - `keyboard_hides_hover` suppresses pointer hover after keyboard or text
   operations until pointer activity resumes. It preserves ancestor hover
   behavior and does not move keyboard focus.
