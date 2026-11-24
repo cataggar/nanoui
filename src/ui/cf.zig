@@ -8,10 +8,32 @@ pub const CFAttributedStringRef = *opaque {};
 pub const CTLineRef = *opaque {};
 pub const CTTypesetterRef = *opaque {};
 pub const CTFontRef = *opaque {};
+pub const CGPathRef = *opaque {};
 pub const CGContextRef = *opaque {};
 pub const CGColorSpaceRef = *opaque {};
 pub const CFIndex = isize;
 pub const CFRange = extern struct { location: CFIndex, length: CFIndex };
+pub const CGAffineTransform = extern struct {
+    a: objc.CGFloat = 1,
+    b: objc.CGFloat = 0,
+    c: objc.CGFloat = 0,
+    d: objc.CGFloat = 1,
+    tx: objc.CGFloat = 0,
+    ty: objc.CGFloat = 0,
+};
+pub const CGPathElementType = enum(i32) {
+    move_to_point = 0,
+    add_line_to_point = 1,
+    add_quad_curve_to_point = 2,
+    add_curve_to_point = 3,
+    close_subpath = 4,
+};
+pub const CGPathElement = extern struct {
+    type: CGPathElementType,
+    points: [*]const objc.CGPoint,
+};
+pub const CGPathApplierFunction = *const fn (?*anyopaque, *const CGPathElement) callconv(.c) void;
+pub const CFDictionaryApplierFunction = *const fn (?*const anyopaque, ?*const anyopaque, ?*anyopaque) callconv(.c) void;
 
 pub const utf8_encoding: u32 = 0x08000100;
 pub const image_alpha_only: u32 = 7;
@@ -26,7 +48,9 @@ pub extern "c" fn CFRelease(ref: *anyopaque) void;
 pub extern "c" fn CFRetain(ref: *anyopaque) *anyopaque;
 pub extern "c" fn CFStringCreateWithBytes(alloc: ?*anyopaque, bytes: [*]const u8, len: CFIndex, encoding: u32, external: bool) ?CFStringRef;
 pub extern "c" fn CFStringGetLength(s: CFStringRef) CFIndex;
+pub extern "c" fn CFStringGetCString(s: CFStringRef, buf: [*]u8, buf_size: CFIndex, encoding: u32) bool;
 pub extern "c" fn CFDictionaryCreate(alloc: ?*anyopaque, keys: [*]const ?*const anyopaque, values: [*]const ?*const anyopaque, n: CFIndex, key_cb: *const anyopaque, value_cb: *const anyopaque) ?CFDictionaryRef;
+pub extern "c" fn CFDictionaryApplyFunction(dict: CFDictionaryRef, applier: CFDictionaryApplierFunction, ctx: ?*anyopaque) void;
 pub extern "c" fn CFAttributedStringCreate(alloc: ?*anyopaque, s: CFStringRef, attrs: CFDictionaryRef) ?CFAttributedStringRef;
 pub extern "c" fn CFAttributedStringGetLength(s: CFAttributedStringRef) CFIndex;
 pub extern "c" fn CTLineCreateWithAttributedString(s: CFAttributedStringRef) ?CTLineRef;
@@ -36,6 +60,14 @@ pub extern "c" fn CTLineGetOffsetForStringIndex(line: CTLineRef, index: CFIndex,
 pub extern "c" fn CTLineGetStringIndexForPosition(line: CTLineRef, pos: objc.CGPoint) CFIndex;
 pub extern "c" fn CTTypesetterCreateWithAttributedString(s: CFAttributedStringRef) ?CTTypesetterRef;
 pub extern "c" fn CTTypesetterSuggestLineBreak(ts: CTTypesetterRef, start: CFIndex, width: f64) CFIndex;
+pub extern "c" fn CGPathApply(path: CGPathRef, info: ?*anyopaque, function: CGPathApplierFunction) void;
+pub extern "c" fn CTFontCreatePathForGlyph(font: CTFontRef, glyph: u16, matrix: ?*const CGAffineTransform) ?CGPathRef;
+pub extern "c" fn CTFontGetSize(font: CTFontRef) objc.CGFloat;
+pub extern "c" fn CTFontGetSymbolicTraits(font: CTFontRef) u32;
+pub extern "c" fn CTFontGetMatrix(font: CTFontRef) CGAffineTransform;
+pub extern "c" fn CTFontCopyGraphicsFont(font: CTFontRef, attributes: ?*anyopaque) ?*anyopaque;
+pub extern "c" fn CTFontCopyVariation(font: CTFontRef) ?CFDictionaryRef;
+pub extern "c" fn CTFontCopyPostScriptName(font: CTFontRef) ?CFStringRef;
 
 pub extern "c" fn CGBitmapContextCreate(data: ?*anyopaque, w: usize, h: usize, bpc: usize, bpr: usize, space: ?CGColorSpaceRef, info: u32) ?CGContextRef;
 pub extern "c" fn CGContextRelease(ctx: CGContextRef) void;

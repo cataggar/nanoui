@@ -32,6 +32,7 @@ pub fn run(gpa: std.mem.Allocator, scene: scenes.Scene, frames: usize) !main.Res
         const t0 = ui.clock.now();
         t.frame();
         const ft = (ui.clock.now() - t0) * 1000;
+        t.renderer.syncSlug(&t.text.slug);
         const timing = t.renderer.drawTimed(target, t.instances.items, t.text.texture(), t.size, t.theme.background);
         if (i >= main.warmup) {
             frame_ms[i - main.warmup] = ft;

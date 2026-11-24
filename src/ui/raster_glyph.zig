@@ -4,11 +4,11 @@
 const std = @import("std");
 const gpu = @import("gpu.zig");
 const raster = @import("raster.zig");
+const xform = @import("raster_xform.zig");
 const Mask = raster.Mask;
 const blend = raster.blend;
 const clipCover = raster.clipCover;
 const unit = raster.unit;
-const unrotate = raster.unrotate;
 
 /// The atlas sampled as Metal's linear filter with clamped edges does.
 fn sample(mask: *const Mask, u: f32, v: f32) f32 {
@@ -44,10 +44,10 @@ fn sample(mask: *const Mask, u: f32, v: f32) f32 {
 /// A text quad: its atlas cell's coverage, native ClearType and grayscale
 /// glyphs blended as DirectWrite blends them, by the quad's color.
 pub fn glyph(out: gpu.Pixels, i: *const gpu.Instance, mask: *const Mask, scale: f32, b: [4]usize) void {
-    if (mask.size == 0 or i.color[3] <= 0) return;
+    if (mask.size == 0 or i.color[3] <= 0 or i.rect[2] <= 0 or i.rect[3] <= 0) return;
     const inv = 1 / scale;
     const c = i.color;
-    const rot = i.xf[0] != 0 or gpu.hasMatrix(i);
+    const rot = xform.hasTransform(i);
     for (b[1]..b[3]) |y| {
         const wy = (@as(f32, @floatFromInt(y)) + 0.5) * inv;
         const row = y * out.width * 4;
@@ -56,19 +56,25 @@ pub fn glyph(out: gpu.Pixels, i: *const gpu.Instance, mask: *const Mask, scale: 
             const wx = (@as(f32, @floatFromInt(x)) + 0.5) * inv;
             var u: f32 = undefined;
             var v: f32 = base_v;
+            var world_x: f32 = wx;
+            var landed: [2]f32 = .{ wx, wy };
             if (rot) {
-                const up = unrotate(i, wx, wy);
+                const pt = xform.inverseFrame(.{ wx, wy }, i) orelse continue;
+                if (i.turn[0] != 0 and !xform.inClip(i, pt.landed)) continue;
+                const up = pt.unrot;
                 if (up[0] < i.rect[0] or up[1] < i.rect[1] or up[0] > i.rect[0] + i.rect[2] or up[1] > i.rect[1] + i.rect[3]) continue;
                 const tx = (up[0] - i.rect[0]) / i.rect[2];
                 const ty = (up[1] - i.rect[1]) / i.rect[3];
                 u = i.uv[0] + (i.uv[2] - i.uv[0]) * tx;
                 v = i.uv[1] + (i.uv[3] - i.uv[1]) * ty;
+                world_x = pt.world[0];
+                landed = pt.landed;
             } else {
                 u = i.uv[0] + (i.uv[2] - i.uv[0]) * ((wx - i.rect[0]) / i.rect[2]);
             }
-            var opacity = c[3] * clipCover(i, wx, wy, inv);
+            var opacity = c[3] * clipCover(i, landed[0], landed[1], inv);
             // A truncated line fading out, as the shader fades it.
-            if (i.border_width > 0) opacity *= std.math.clamp((i.radius - wx) / i.border_width, 0, 1);
+            if (i.border_width > 0) opacity *= std.math.clamp((i.radius - world_x) / i.border_width, 0, 1);
             if (opacity <= 0) continue;
             const at = row + x * 4;
             if (mask.native_pixels.len > 0) {

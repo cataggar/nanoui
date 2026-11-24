@@ -5,7 +5,7 @@ const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
 
-pub const Scene = enum { boxes, text, scroll, list, dashboard, springs, letters };
+pub const Scene = enum { boxes, text, scroll, list, dashboard, springs, letters, zoom_text };
 
 pub const State = struct {
     scene: Scene,
@@ -21,6 +21,7 @@ pub const State = struct {
             .dashboard => dashboard(s, c),
             .springs => springs(s, c),
             .letters => letters(s, c),
+            .zoom_text => zoomText(s, c),
         }
     }
 };
@@ -168,6 +169,24 @@ fn letters(s: *State, c: *ui.Context) void {
             .stagger_each = 0.012,
             .transition = .{ .tween = .{ .duration = 0.25, .ease = .ease_out } },
         });
+    }
+}
+
+/// 120 labels inside a continuously scaling and rotating container (Slug vector text).
+fn zoomText(s: *State, c: *ui.Context) void {
+    const root = ui.div(c).column().sizeFull().itemsCenter().justifyCenter();
+    defer root.end();
+    const zoom = ui.div(c).column().gap(6)
+        .scale(0.7 + 2.3 * (0.5 + 0.5 * @sin(s.time * 1.7)))
+        .rotate(0.15 * @sin(s.time * 0.9));
+    defer zoom.end();
+    for (0..12) |r| {
+        const row = ui.div(c).row().gap(10);
+        defer row.end();
+        for (0..10) |col| {
+            const idx = r * 10 + col;
+            ui.textf(c, .{ .size = 13 }, "Node {d}", .{idx});
+        }
     }
 }
 

@@ -95,14 +95,49 @@ pub fn run(c: *Context, view: View, ts: *text.TextSystem, instances: *std.ArrayL
         if (nidx < c.nodes.items.len) c.stage_rects[si] = c.nodes.items[nidx].rect;
     }
     const t2 = now();
+    c.slug_overflow_fallback = false;
+    defer c.slug_overflow_fallback = false;
     ts.images.reset_during_frame = false;
     selection.beginPaint(c);
     paint.paint(c, instances);
-    if (ts.atlas.reset_during_frame or ts.images.reset_during_frame) {
+    const atlas_r1 = ts.atlas.reset_during_frame;
+    const images_r1 = ts.images.reset_during_frame;
+    const slug_r1 = ts.slug.reset_during_frame;
+    if (atlas_r1 or images_r1 or slug_r1) {
         // An atlas filled up and was reset: earlier sprites are stale.
+        ts.atlas.reset_during_frame = false;
+        ts.images.reset_during_frame = false;
+        ts.slug.clearResetFlag();
         c.next_hits.clearRetainingCapacity();
         selection.beginPaint(c);
         paint.paint(c, instances);
+        const atlas_r2 = ts.atlas.reset_during_frame;
+        const images_r2 = ts.images.reset_during_frame;
+        const slug_r2 = ts.slug.reset_during_frame;
+        if (slug_r2) {
+            // Single frame exceeded 4 MiB of vector glyphs: fall back to bitmap text so no stale blob is drawn.
+            c.slug_overflow_fallback = true;
+            ts.atlas.reset_during_frame = false;
+            ts.images.reset_during_frame = false;
+            ts.slug.clearResetFlag();
+            c.next_hits.clearRetainingCapacity();
+            selection.beginPaint(c);
+            paint.paint(c, instances);
+            if (ts.atlas.reset_during_frame or ts.images.reset_during_frame) {
+                const ar3 = ts.atlas.reset_during_frame;
+                const ir3 = ts.images.reset_during_frame;
+                ts.atlas.reset_during_frame = false;
+                ts.images.reset_during_frame = false;
+                c.next_hits.clearRetainingCapacity();
+                selection.beginPaint(c);
+                paint.paint(c, instances);
+                ts.atlas.reset_during_frame = ts.atlas.reset_during_frame or ar3;
+                ts.images.reset_during_frame = ts.images.reset_during_frame or ir3;
+            }
+        }
+        ts.atlas.reset_during_frame = ts.atlas.reset_during_frame or atlas_r1 or atlas_r2;
+        ts.images.reset_during_frame = ts.images.reset_during_frame or images_r1 or images_r2;
+        if (slug_r1 or slug_r2) ts.slug.reset_during_frame = true;
     }
     selection.afterPaint(c);
     const t3 = now();

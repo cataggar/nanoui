@@ -435,6 +435,7 @@ pub const Tester = struct {
     /// The last frame's pixels (BGRA, premultiplied); free with `deinit`.
     pub fn render(t: *Tester, gpa: std.mem.Allocator) !gpu.Pixels {
         if (!portable) t.renderer.syncImages(&t.text.images);
+        if (!portable) t.renderer.syncSlug(&t.text.slug);
         if (!portable) t.renderer.textures = t.ctx.textures.items;
         if (!portable) t.renderer.gradients = t.ctx.gradients.items;
         if (!portable) return t.renderer.drawOffscreen(gpa, t.instances.items, t.text.texture(), t.size, t.scale, t.ctx.theme.background);
@@ -444,7 +445,7 @@ pub const Tester = struct {
         var pictures = t.text.images.pictures();
         pictures.textures = t.ctx.textures.items;
         pictures.gradients = t.ctx.gradients.items;
-        raster.draw(out, t.instances.items, t.text.atlas.mask(), pictures, t.scale, t.ctx.theme.background);
+        raster.draw(out, t.instances.items, t.text.mask(), pictures, t.scale, t.ctx.theme.background);
         return out;
     }
 
@@ -455,6 +456,7 @@ pub const Tester = struct {
     pub fn renderLinear(t: *Tester, gpa: std.mem.Allocator) !metal.LinearPixels {
         if (comptime portable) return error.Unsupported;
         t.renderer.syncImages(&t.text.images);
+        t.renderer.syncSlug(&t.text.slug);
         t.renderer.textures = t.ctx.textures.items;
         t.renderer.gradients = t.ctx.gradients.items;
         const was = t.renderer.sdr_white_scale;

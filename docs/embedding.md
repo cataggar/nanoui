@@ -138,9 +138,10 @@ arenas and atlases:
    `cursor.tooltip`, `clipboard_write`, `ime.?.text`, `a11y`, `stage_rects`)
    remain valid **until the next `host.frame(...)` or `host.deinit()` call**.
    Copy `clipboard_write` or `a11y` labels if retaining them across frames.
-2. **Atlas pixel slices** (`glyph_atlas.pixels`, `image_atlas.pixels`) remain
-   valid until the next `host.frame(...)` or `host.deinit()` call. Growing or
-   resetting an atlas reallocates its backing buffer and increments `resets`.
+2. **Atlas pixel & table slices** (`glyph_atlas.pixels`, `image_atlas.pixels`,
+   `vector_glyphs.words`) remain valid until the next `host.frame(...)` or
+   `host.deinit()` call. Growing or resetting an atlas reallocates its backing
+   buffer and increments `resets` (or `vector_glyphs.generation`).
 3. **One-shot side effects**: `clipboard_write` and `close_requested` are
    cleared automatically at the start of the next `host.frame(...)`.
 4. **External textures** (`out.textures`): `gpu.Texture` descriptors passed to
@@ -198,6 +199,7 @@ When `clip_round != 0`, the clip box (`clip`) has rounded corners (`gpu.clipCorn
 | `layer_end` | `10` | **Barrier**: Matches `layer_begin` (`gpu.groupEnd`). `color[3]` = group opacity; `border_color` = `[top_y, bottom_y, top_fade_pt, bottom_fade_pt]`. Rewritten to `layer_composite` (`11`) when compositing the group texture. |
 | `layer_composite` | `11` | Composites the premultiplied offscreen layer texture at `pos.xy` multiplied by `color[3] * scroll_fade * clip_cover * pulse_alpha`. |
 | `hole` | `12` | Rounded box (`rect`, `radius`) drawn with `BlendMode.punch_out_hole` (`src * 0 + dst * (1 - src.a)`), cutting transparent alpha through the UI target. |
+| `vector_text` | `13` | Analytic Slug vector glyph (`TextStyle.vector` or `Context.auto_vector_text` under geometric transforms). `border_color.xy` packs the 32-bit word offset `blob = uint(border_color.x) + uint(border_color.y) * 65536` into `out.vector_glyphs.words`; `uv = [u0, v0, u1, v1]` holds em-space (`+Y` up) quad corners interpolated across the quad; `color` is straight sRGB ink. When `border_width > 0`, horizontal truncation fades alpha by `clamp((radius - world.x) / border_width, 0, 1)`. Batched inside normal `.draw` runs (no pass barrier). |
 
 ---
 
@@ -258,7 +260,8 @@ All fragment outputs are **premultiplied display-encoded sRGB** (`rgb <= a`):
 
 ## 6. Atlases & Incremental GPU Upload
 
-`FrameOutput` exposes two CPU-backed texture atlases:
+`FrameOutput` exposes two CPU-backed texture atlases and one packed vector-glyph
+word table:
 
 - **`out.glyph_atlas`** (`contract.GlyphAtlas`): `R8_UNORM`, 1 byte/texel,
   row pitch `width` bytes, linear filtering, `clamp_to_edge`.
@@ -266,6 +269,17 @@ All fragment outputs are **premultiplied display-encoded sRGB** (`rgb <= a`):
   (`[B, G, R, A]` bytes in memory; swizzle `.bgra` if uploading as `RGBA8` on
   GLES/WebGL), 4 bytes/texel, row pitch `width * 4` bytes, linear filtering,
   `clamp_to_edge`.
+- **`out.vector_glyphs`** (`contract.VectorGlyphTable`): `1024`-wide `R32_UINT`
+  word table (`words: []const u32`, `width = 1024`, `height` rows, `used_words`,
+  `generation`) addressed linearly as `(word_idx & 1023, word_idx >> 10)` using
+  nearest/integer texel fetches (`texelFetch` / `read` / `Load`). Word `0` is a
+  zero sentinel; each `Kind.vector_text` (`13`) glyph header begins at `blob`
+  with 9 `u32` words (`min_x`, `min_y`, `scale_x`, `scale_y` as `f32` bits,
+  `h_bands | (v_bands << 8)`, `total_curves | (flags << 16)`, `h_dir_off`,
+  `v_dir_off`, `pts_off`), followed by `(count, list_off)` band directories,
+  `u16`-pair curve index lists, and quantized `u16x2` control-point triples.
+  Re-upload `words[0..used_words]` (recreating the `1024 × height` `R32_UINT`
+  texture if `height` grew) whenever `vector_glyphs.generation` changes.
 
 Upload logic for custom GPU backends:
 

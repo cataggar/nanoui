@@ -73,7 +73,7 @@ fn compare(t: *ui.Tester, limits: Limits, es: bool) !void {
     const gpa = testing.allocator;
     var r = if (es) try Renderer.initEs() else try Renderer.init();
     defer r.deinit();
-    r.sync(t.text.atlas.mask(), t.text.atlas.generation, t.text.images.pictures(), t.text.images.generation);
+    r.sync(t.text.mask(), t.text.atlas.generation, t.text.images.pictures(), t.text.images.generation);
     r.draw(t.instances.items, t.size, t.scale, t.theme.background, 0, t.ctx.time);
     const ours = try r.read(gpa);
     defer ours.deinit(gpa);
@@ -162,6 +162,15 @@ fn scenes(es: bool) !void {
         try t.init(gpa, .init(&s, Scene.view), .{ .width = 140, .height = 110, .scale = 1 });
         defer t.deinit();
         t.settle(0.1);
+        try compare(&t, .{ .mean = 0.05, .worst = 16, .off_in = 1000 }, es);
+    }
+    {
+        const Scene = @import("tests_slug.zig").Scene;
+        var s: Scene = .{};
+        var t: ui.Tester = undefined;
+        try t.init(gpa, .init(&s, Scene.view), .{ .width = 360, .height = 300 });
+        defer t.deinit();
+        t.settle(1);
         try compare(&t, .{ .mean = 0.05, .worst = 16, .off_in = 1000 }, es);
     }
 }

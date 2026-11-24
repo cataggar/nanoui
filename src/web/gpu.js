@@ -8,7 +8,7 @@ export function createGPU({ device, memory, done, format = "bgra8unorm", generat
   let onTiming = () => {};
   let timing = createTiming(device, sample=>onTiming(sample));
   const pipelineJobs=[];
-  const formats = ["bgra8unorm", "rgba8unorm", "r8unorm", "rgba16float"];
+  const formats = ["bgra8unorm", "rgba8unorm", "r8unorm", "rgba16float", "r32uint"];
   const objects = {
     // Pass true only when the stored object's pixels will never be modified.
     put(value, immutableContents = false) {
@@ -107,6 +107,7 @@ export function createGPU({ device, memory, done, format = "bgra8unorm", generat
         if (kind === 4) e.externalTexture = {};
         if (kind === 5) e.texture = { sampleType: "float", viewDimension: "3d" };
         if (kind === 6) e.sampler = { type: "non-filtering" };
+        if (kind === 7) e.texture = { sampleType: "uint" };
         entries.push(e);
       }
       return objects.put(device.createBindGroupLayout({ entries }));

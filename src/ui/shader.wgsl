@@ -145,6 +145,23 @@ fn shade(v: Varyings, i: Instance) -> vec4f {
         if (i.border_width > 0.0) { a *= clamp((i.radius - v.world.x) / i.border_width, 0.0, 1.0); }
         return vec4f(i.color.rgb * a, a);
     }
+    if (i.kind == 13.0) {
+        let blob = u32(i.border_color.x + 0.5) | (u32(i.border_color.y + 0.5) << 16u);
+        var ems_per_pixel = abs(i.uv.zw - i.uv.xy) / max(i.rect.zw * params.scale, vec2f(1e-6));
+        if (has_transform(i)) {
+            let px_pt = v.position.xy / params.scale;
+            let inv_s = 1.0 / params.scale;
+            let lx = inverse_frame(px_pt + vec2f(inv_s, 0.0), i).local - i.rect.xy;
+            let ly = inverse_frame(px_pt + vec2f(0.0, inv_s), i).local - i.rect.xy;
+            let uv_scale = (i.uv.zw - i.uv.xy) / max(i.rect.zw, vec2f(1e-6));
+            let duv_dx = (lx - v.local) * uv_scale;
+            let duv_dy = (ly - v.local) * uv_scale;
+            ems_per_pixel = vec2f(length(vec2f(duv_dx.x, duv_dy.x)), length(vec2f(duv_dx.y, duv_dy.y)));
+        }
+        var a = slug_coverage(blob, v.uv, ems_per_pixel) * i.color.a;
+        if (i.border_width > 0.0) { a *= clamp((i.radius - v.world.x) / i.border_width, 0.0, 1.0); }
+        return vec4f(i.color.rgb * a, a);
+    }
     let half_size = i.rect.zw * 0.5;
     let p = v.local - half_size;
     let r_abs = min(abs(i.radius), min(half_size.x, half_size.y));
@@ -201,10 +218,16 @@ fn shade(v: Varyings, i: Instance) -> vec4f {
         v.world = point.world;
         v.local = point.local - i.rect.xy;
         let edge_slack = select(0.0, 0.0001, any(i.m != vec4f(1.0,0.0,0.0,1.0)) || any(i.mt.xy != vec2f(0.0)));
-        if (length(i.vel.xy) <= 0.5 && (i.kind == 0.0 || i.kind == 1.0 || i.kind == 3.0 || i.kind == 8.0 || i.kind == 12.0)) {
+        if (length(i.vel.xy) <= 0.5 && (i.kind == 0.0 || i.kind == 1.0 || i.kind == 3.0 || i.kind == 8.0 || i.kind == 12.0 || i.kind == 13.0)) {
             if(any(point.local < i.rect.xy-vec2f(edge_slack)) || any(point.local > i.rect.xy+i.rect.zw+vec2f(edge_slack))) { discard; }
         }
-        if (i.kind == 1.0 || i.kind == 3.0 || i.kind == 8.0) { v.uv = i.uv.xy + v.local / i.rect.zw * (i.uv.zw-i.uv.xy); }
+        if (i.kind == 1.0 || i.kind == 3.0 || i.kind == 8.0 || i.kind == 13.0) { v.uv = i.uv.xy + v.local / i.rect.zw * (i.uv.zw-i.uv.xy); }
+    } else if (i.kind == 13.0) {
+        let px_pt = v.position.xy / params.scale;
+        v.screen = px_pt;
+        v.world = px_pt;
+        v.local = px_pt - i.rect.xy;
+        v.uv = i.uv.xy + v.local / max(i.rect.zw, vec2f(1e-6)) * (i.uv.zw - i.uv.xy);
     }
     let clip = clip_coverage(v, i);
     return shade(v, i) * (clip * v.pulse_alpha);

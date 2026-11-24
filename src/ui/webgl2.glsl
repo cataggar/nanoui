@@ -176,6 +176,7 @@ vec4 line_color(vec2 world, Instance i);
 vec4 triangle_color(vec2 world, Instance i);
 bool has_transform(Instance i);
 LocalPoint inverse_frame(vec2 screen, Instance i);
+float slug_coverage(uint blob, vec2 render_coord, vec2 ems_per_pixel);
 
 #if defined(ENTRY_QUAD_FS) || defined(ENTRY_GLASS_FS) || defined(ENTRY_EXTERNAL_FS)
 in vec2 v_local;
@@ -271,6 +272,23 @@ vec4 shade(Varyings v, Instance i) {
         if (i.border_width > 0.0) { a *= clamp((i.radius - v.world.x) / i.border_width, 0.0, 1.0); }
         return vec4(i.color.rgb * a, a);
     }
+    if (i.kind == 13.0) {
+        uint blob = uint(i.border_color.x + 0.5) | (uint(i.border_color.y + 0.5) << 16u);
+        vec2 ems_per_pixel = abs(i.uv.zw - i.uv.xy) / max(i.rect.zw * u_scale, vec2(1e-6));
+        if (has_transform(i)) {
+            vec2 px_pt = v.position.xy / u_scale;
+            float inv_s = 1.0 / u_scale;
+            vec2 lx = inverse_frame(px_pt + vec2(inv_s, 0.0), i).local - i.rect.xy;
+            vec2 ly = inverse_frame(px_pt + vec2(0.0, inv_s), i).local - i.rect.xy;
+            vec2 uv_scale = (i.uv.zw - i.uv.xy) / max(i.rect.zw, vec2(1e-6));
+            vec2 duv_dx = (lx - v.local) * uv_scale;
+            vec2 duv_dy = (ly - v.local) * uv_scale;
+            ems_per_pixel = vec2(length(vec2(duv_dx.x, duv_dy.x)), length(vec2(duv_dx.y, duv_dy.y)));
+        }
+        float a = slug_coverage(blob, v.uv, ems_per_pixel) * i.color.a;
+        if (i.border_width > 0.0) { a *= clamp((i.radius - v.world.x) / i.border_width, 0.0, 1.0); }
+        return vec4(i.color.rgb * a, a);
+    }
     vec2 half_size = i.rect.zw * 0.5;
     vec2 p = v.local - half_size;
     float r_abs = min(abs(i.radius), min(half_size.x, half_size.y));
@@ -336,12 +354,18 @@ void main() {
         v.world = point.world;
         v.local = point.local - i.rect.xy;
         float edge_slack = (any(notEqual(i.m, vec4(1.0, 0.0, 0.0, 1.0))) || any(notEqual(i.mt.xy, vec2(0.0)))) ? 0.0001 : 0.0;
-        if (length(i.vel.xy) <= 0.5 && (i.kind == 0.0 || i.kind == 1.0 || i.kind == 3.0 || i.kind == 8.0 || i.kind == 12.0)) {
+        if (length(i.vel.xy) <= 0.5 && (i.kind == 0.0 || i.kind == 1.0 || i.kind == 3.0 || i.kind == 8.0 || i.kind == 12.0 || i.kind == 13.0)) {
             if (any(lessThan(point.local, i.rect.xy - vec2(edge_slack))) || any(greaterThan(point.local, i.rect.xy + i.rect.zw + vec2(edge_slack)))) { discard; }
         }
-        if (i.kind == 1.0 || i.kind == 3.0 || i.kind == 8.0) {
+        if (i.kind == 1.0 || i.kind == 3.0 || i.kind == 8.0 || i.kind == 13.0) {
             v.uv = i.uv.xy + v.local / i.rect.zw * (i.uv.zw - i.uv.xy);
         }
+    } else if (i.kind == 13.0) {
+        vec2 px_pt = v.position.xy / u_scale;
+        v.screen = px_pt;
+        v.world = px_pt;
+        v.local = px_pt - i.rect.xy;
+        v.uv = i.uv.xy + v.local / max(i.rect.zw, vec2(1e-6)) * (i.uv.zw - i.uv.xy);
     }
     float clip = clip_coverage(v, i);
     frag_color = shade(v, i) * (clip * v.pulse_alpha);

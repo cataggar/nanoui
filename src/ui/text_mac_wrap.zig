@@ -139,3 +139,23 @@ pub fn breakLines(self: *TextSystem, s: []const u8, style: types.TextStyle, span
     if (lines.items.len == 0) lines.append(self.gpa, .{ .start = 0, .end = 0, .width = 0 }) catch {};
     return lines.toOwnedSlice(self.gpa);
 }
+
+/// The x offset of the caret before byte `index` of `s`.
+pub fn caretX(self: *TextSystem, s: []const u8, style: types.TextStyle, index: usize) f32 {
+    const shaper = @import("shaper.zig");
+    const to = @min(index, s.len);
+    if (to == 0) return 0;
+    if (shaper.isSimpleAscii(s[0..to]) and style.family == null) return self.layout(s[0..to], style).width;
+    const l = self.line(s, style);
+    defer cf.CFRelease(l);
+    return @floatCast(cf.CTLineGetOffsetForStringIndex(l, cf.utf16Offset(s, to), null));
+}
+
+/// The byte index of the caret position nearest to `x`.
+pub fn indexAt(self: *TextSystem, s: []const u8, style: types.TextStyle, x: f32) usize {
+    if (s.len == 0) return 0;
+    const l = self.line(s, style);
+    defer cf.CFRelease(l);
+    const i = cf.CTLineGetStringIndexForPosition(l, .{ .x = x, .y = 0 });
+    return if (i < 0) s.len else cf.byteOffset(s, i);
+}

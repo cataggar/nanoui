@@ -12,7 +12,7 @@ const glass = @import("glass.zig");
 const raster = @import("raster.zig");
 const gl = @import("gl.zig");
 
-const source = @embedFile("shader.glsl");
+const source = @embedFile("slug.glsl") ++ "\n" ++ @embedFile("shader.glsl") ++ "\n" ++ @embedFile("glass.glsl");
 const stride = @sizeOf(gpu.Instance);
 
 /// A texture and the framebuffer that draws into it.
@@ -59,6 +59,11 @@ pub const Renderer = struct {
     atlas: u32 = 0,
     atlas_size: u32 = 0,
     atlas_generation: u64 = std.math.maxInt(u64),
+    slug: u32 = 0,
+    slug_height: u32 = 0,
+    slug_used: u32 = 0,
+    slug_resets: u64 = std.math.maxInt(u64),
+    slug_generation: u64 = std.math.maxInt(u64),
     images: u32 = 0,
     images_generation: u64 = std.math.maxInt(u64),
     frame: Target = .{},
@@ -96,6 +101,7 @@ pub const Renderer = struct {
         }
         // Until a picture comes, one transparent texel stands in.
         r.images = newTexture(gl.RGBA8, 1, 1, r.bgra(), &[4]u8{ 0, 0, 0, 0 }, gl.LINEAR);
+        r.slug = newUintTexture(1, 1, &[1]u32{0});
         return r;
     }
 
@@ -117,7 +123,7 @@ pub const Renderer = struct {
         if (r.vao != 0) g.glDeleteVertexArrays(1, &r.vao);
         if (r.empty_vao != 0) g.glDeleteVertexArrays(1, &r.empty_vao);
         if (r.vbo != 0) g.glDeleteBuffers(1, &r.vbo);
-        for ([_]u32{ r.atlas, r.images }) |t| if (t != 0) g.glDeleteTextures(1, &t);
+        for ([_]u32{ r.atlas, r.images, r.slug }) |t| if (t != 0) g.glDeleteTextures(1, &t);
         r.frame.deinit();
         for (r.groups.items) |*group| group.deinit();
         r.groups.deinit(std.heap.page_allocator);
@@ -146,6 +152,30 @@ pub const Renderer = struct {
             g.glDeleteTextures(1, &r.images);
             r.images = newTexture(gl.RGBA8, s, s, r.bgra(), pictures.pixels.ptr, gl.LINEAR);
             r.images_generation = pictures_generation;
+        }
+        if (mask.slug_height > 0 and (mask.slug_generation != r.slug_generation or mask.slug_height != r.slug_height) and mask.slug_words.len >= 1024 * @as(usize, mask.slug_height)) {
+            const h: i32 = @intCast(mask.slug_height);
+            const used: u32 = if (mask.slug_used > 0) @min(mask.slug_used, mask.slug_height * 1024) else mask.slug_height * 1024;
+            const active_rows = @min(mask.slug_height, @max(@as(u32, 1), (used + 1023) / 1024));
+            var full_upload = false;
+            g.glPixelStorei(gl.UNPACK_ALIGNMENT, 4);
+            if (mask.slug_height != r.slug_height or r.slug == 0) {
+                if (r.slug != 0) g.glDeleteTextures(1, &r.slug);
+                r.slug = newUintTexture(1024, h, null);
+                r.slug_height = mask.slug_height;
+                full_upload = true;
+            } else if (mask.slug_resets != r.slug_resets or used < r.slug_used) {
+                full_upload = true;
+            }
+            const start_row: u32 = if (full_upload) 0 else @min(active_rows, r.slug_used / 1024);
+            const row_count = active_rows - start_row;
+            if (row_count > 0) {
+                g.glBindTexture(gl.TEXTURE_2D, r.slug);
+                g.glTexSubImage2D(gl.TEXTURE_2D, 0, 0, @intCast(start_row), 1024, @intCast(row_count), gl.RED_INTEGER, gl.UNSIGNED_INT, &mask.slug_words[@as(usize, start_row) * 1024]);
+            }
+            r.slug_used = used;
+            r.slug_resets = mask.slug_resets;
+            r.slug_generation = mask.slug_generation;
         }
     }
 
@@ -270,6 +300,7 @@ pub const Renderer = struct {
         bindTexture(prog, "atlas", 0, r.atlas);
         bindTexture(prog, "images", 1, r.images);
         bindTexture(prog, "group_layer", 2, r.group_texture);
+        bindTexture(prog, "slug_tex", 3, r.slug);
         g.glDrawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, @intCast(count));
     }
 
@@ -370,6 +401,20 @@ fn newTexture(internal: i32, w: i32, h: i32, format: u32, data: ?*const anyopaqu
     return t;
 }
 
+fn newUintTexture(w: i32, h: i32, data: ?[*]const u32) u32 {
+    const g = &gl.api;
+    var t: u32 = 0;
+    g.glGenTextures(1, &t);
+    g.glBindTexture(gl.TEXTURE_2D, t);
+    g.glPixelStorei(gl.UNPACK_ALIGNMENT, 4);
+    g.glTexImage2D(gl.TEXTURE_2D, 0, @intCast(gl.R32UI), w, h, 0, gl.RED_INTEGER, gl.UNSIGNED_INT, data);
+    g.glTexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    g.glTexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    g.glTexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    g.glTexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    return t;
+}
+
 /// A program of `source`'s two stages, by their defines.
 fn program(es: bool, comptime vs: []const u8, comptime fs: []const u8) !u32 {
     const g = &gl.api;
@@ -398,7 +443,7 @@ fn shader(es: bool, kind: u32, comptime define: []const u8) !u32 {
     const g = &gl.api;
     const s = g.glCreateShader(kind);
     const text = if (es)
-        "#version 300 es\nprecision highp float;\nprecision highp int;\nprecision highp sampler2D;\n#define " ++ define ++ "\n" ++ source
+        "#version 300 es\nprecision highp float;\nprecision highp int;\nprecision highp sampler2D;\nprecision highp usampler2D;\n#define " ++ define ++ "\n" ++ source
     else
         "#version 330 core\n#define " ++ define ++ "\n" ++ source;
     const ptrs = [1][*]const u8{text.ptr};

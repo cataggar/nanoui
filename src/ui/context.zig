@@ -108,6 +108,9 @@ pub const Context = struct {
     pixel_snap: bool = false,
     /// With pixel snapping, round text measurements up to device pixels too.
     pixel_snap_text: bool = true,
+    /// Emit analytic vector text (`Kind.vector_text`) automatically under geometric transforms.
+    auto_vector_text: bool = true,
+    slug_overflow_fallback: bool = false,
     /// What draws the frames: Metal, OpenGL, or nanoui's own CPU renderer.
     renderer: []const u8 = if (@import("text.zig").portable) "CPU" else "Metal",
     /// Wait for the display's refresh when presenting (Windows' Direct3D 11).

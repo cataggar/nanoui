@@ -552,3 +552,8 @@ test "a second scan preserves the disk face start and failed loads still invalid
     try std.testing.expect(db.load(@intCast(start)) == null);
     try std.testing.expectEqual(@import("fontindex.zig").State.stale, db.cache.state);
 }
+
+test {
+    _ = @import("curve.zig");
+    _ = @import("band.zig");
+}

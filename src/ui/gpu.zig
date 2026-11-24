@@ -96,7 +96,23 @@ pub const Kind = struct {
     /// A rounded box cut out of the frame (`ui.hole`), drawn as a quad's
     /// fill: what's under the frame (a map) shows there.
     pub const hole: f32 = 12;
+    /// Analytic vector glyph (`slug_store.zig`): `border_color.xy` packs the
+    /// 32-bit word offset (`lo16`, `hi16`), `uv` holds `[u0, v0, u1, v1]` in
+    /// em-space (`y`-up), and `radius`/`border_width` carry truncation fade.
+    pub const vector_text: f32 = 13;
 };
+
+pub fn vectorGlyph(rect: [4]f32, uv: [4]f32, blob: u32, color: types.Color, clip: [4]f32) Instance {
+    return .{
+        .rect = rect,
+        .color = color4(color),
+        .border_color = .{ @floatFromInt(blob & 0xFFFF), @floatFromInt(blob >> 16), 0, 0 },
+        .uv = uv,
+        .kind = Kind.vector_text,
+        .clip = clip,
+        .m = .{ 1, 0, 0, 1 },
+    };
+}
 
 /// The matching end of a grouped subtree, including nested masks. A
 /// malformed stream cannot accidentally consume the remainder of a frame.

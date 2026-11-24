@@ -228,7 +228,7 @@ export fn nanoui_web_snapshot() usize {
     }
     pictures.textures = s.ctx.textures.items;
     pictures.gradients = s.ctx.gradients.items;
-    @import("../ui/raster.zig").draw(snapshot.?, s.instances.items, s.text.atlas.mask(), pictures, s.scale, s.theme.background);
+    @import("../ui/raster.zig").draw(snapshot.?, s.instances.items, s.text.mask(), pictures, s.scale, s.theme.background);
     return @intFromPtr(pixels.ptr);
 }
 

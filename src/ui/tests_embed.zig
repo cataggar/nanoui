@@ -493,3 +493,68 @@ test "registerFontFace cleans up on Host.deinit and dirty_from_generation detect
     }
     try testing.expect(!font_registry.hasFamily("EmbedFaceScoped"));
 }
+
+test "vector text emits Kind.vector_text instances, batches in PassIterator, and populates vector_glyphs" {
+    var host = try embed.Host.init(testing.allocator, .{
+        .size = .{ .w = 320, .h = 160 },
+        .scale = 2.0,
+        .theme = .dark_theme,
+        .scan_system_fonts = false,
+    });
+    defer host.deinit();
+    try host.registerFontFace(.{
+        .family = "EmbedSlugSans",
+        .weight = .{ 400, 400 },
+        .bytes = dejavu_ttf,
+    });
+
+    const VectorScene = struct {
+        pt: f32 = 16,
+        fn view(s: *@This(), c: *ui.Context) void {
+            const root = ui.div(c).column().sizeFull().p(12).gap(8);
+            defer root.end();
+            ui.text(c, "Slug Vector", .{ .size = s.pt, .color = .white, .family = "EmbedSlugSans", .vector = true });
+            _ = c.open(.{ .width = .{ .px = 180 }, .height = .{ .px = 36 }, .scale = 1.25 }, null);
+            ui.text(c, "Zoomed", .{ .size = s.pt, .color = .white, .family = "EmbedSlugSans" });
+            c.end();
+        }
+    };
+    var scene: VectorScene = .{};
+    const view = ui.View.init(&scene, VectorScene.view);
+
+    const out = host.frame(view, 1.0 / 60.0, 0.0);
+    try testing.expectEqual(@as(f32, 13), contract.Kind.vector_text);
+    try testing.expectEqual(@as(u32, 1024), out.vector_glyphs.width);
+    try testing.expect(out.vector_glyphs.height >= 16);
+    try testing.expect(out.vector_glyphs.used_words > 9);
+    try testing.expect(out.vector_glyphs.generation > 0);
+    try testing.expectEqual(@as(usize, out.vector_glyphs.width * out.vector_glyphs.height), out.vector_glyphs.words.len);
+
+    var vec_count: usize = 0;
+    for (out.instances) |inst| {
+        if (inst.kind != contract.Kind.vector_text) continue;
+        vec_count += 1;
+        const lo: u32 = @intFromFloat(inst.border_color[0]);
+        const hi: u32 = @intFromFloat(inst.border_color[1]);
+        const blob = lo | (hi << 16);
+        try testing.expect(blob >= 1 and blob + 9 <= out.vector_glyphs.used_words);
+        try testing.expect(inst.uv[2] > inst.uv[0] and inst.uv[1] > inst.uv[3]);
+    }
+    // "Slug Vector" (10 non-space glyphs) + "Zoomed" (6 glyphs via auto_vector_text) = 16.
+    try testing.expectEqual(@as(usize, 16), vec_count);
+
+    // Kind.vector_text stays inside a single contiguous `.draw` run without barrier splits.
+    var it = contract.iterPasses(out.instances, out.size);
+    const first_run = it.next() orelse return error.ExpectedDrawPass;
+    try testing.expect(first_run == .draw);
+    try testing.expect(it.next() == null);
+
+    // Zooming to 48pt reuses the same em-space SlugStore curves without repacking.
+    const used_before = out.vector_glyphs.used_words;
+    const gen_before = out.vector_glyphs.generation;
+    scene.pt = 48;
+    const out_zoomed = host.frame(view, 1.0 / 60.0, 0.02);
+    try testing.expectEqual(used_before, out_zoomed.vector_glyphs.used_words);
+    try testing.expectEqual(gen_before, out_zoomed.vector_glyphs.generation);
+}
+

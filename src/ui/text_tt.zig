@@ -11,10 +11,12 @@ const fontdb = @import("tt/fontdb.zig");
 const tt = @import("tt/font.zig");
 const atlas_mod = @import("atlas_tt.zig");
 const utf8 = @import("utf8.zig");
-const cjk_break = @import("cjk_break.zig");
 const stacks = @import("text_stack_tt.zig");
 const registry = @import("font_registry.zig");
 const backend = @import("../backend.zig");
+const slug_store = @import("slug_store.zig");
+const slug_glyph = @import("slug_glyph.zig");
+const wrap_mod = @import("text_tt_wrap.zig");
 pub const rich = @import("rich_tt.zig");
 /// Windows draws glyphs with DirectWrite (`dwrite.zig`) unless in embed mode.
 const native_windows = @import("dwrite.zig").enabled and !backend.is_embed;
@@ -73,6 +75,7 @@ pub const TextSystem = struct {
     gpa: std.mem.Allocator,
     db: fontdb.Db,
     atlas: Atlas,
+    slug: slug_store.Store = .{},
     /// The pictures shown (`ui.image`).
     images: @import("images.zig").Images,
     scale: f32 = 2,
@@ -132,6 +135,7 @@ pub const TextSystem = struct {
         self.layouts.deinit(self.gpa);
         self.previous.deinit(self.gpa);
         self.wraps.deinit(self.gpa);
+        self.slug.deinit(self.gpa);
         self.atlas.deinit();
         self.db.deinit();
     }
@@ -245,6 +249,7 @@ pub const TextSystem = struct {
 
     pub fn beginFrame(self: *TextSystem) void {
         self.atlas.reset_during_frame = false;
+        self.slug.clearResetFlag();
         self.syncFonts();
         if (self.layouts.count() >= 4096) {
             freeLayouts(self.gpa, &self.previous);
@@ -468,6 +473,19 @@ pub const TextSystem = struct {
         return 0;
     }
 
+    pub fn slugView(self: *const TextSystem) slug_store.View {
+        return self.slug.view();
+    }
+
+    pub fn vectorGlyph(self: *TextSystem, lay: *const Layout, run_idx: usize, glyph_id: u16) ?slug_store.Entry {
+        _ = lay;
+        return slug_glyph.vectorGlyphTt(self, run_idx, glyph_id);
+    }
+
+    pub fn runFontSize(self: *const TextSystem, run_idx: usize, fallback: f32) f32 {
+        return slug_glyph.runFontSizeTt(self, run_idx, fallback);
+    }
+
     pub fn width(self: *TextSystem, s: []const u8, style: types.TextStyle) f32 {
         return self.layout(s, style).width;
     }
@@ -485,14 +503,25 @@ pub const TextSystem = struct {
         const lay = if (styled) rich.layout(self, s, style, spans, 0) else self.layout(s, style);
         var lines: std.ArrayList(Line) = .empty;
         defer lines.deinit(self.gpa);
-        breakLines(self.gpa, &lines, s, lay, @max(1, max_width)) catch {};
+        wrap_mod.breakLines(self.gpa, &lines, s, lay, @max(1, max_width)) catch {};
         if (lines.items.len == 0) lines.append(self.gpa, .{ .start = 0, .end = 0, .width = 0 }) catch {};
         return self.wraps.put(self.gpa, k, lines.toOwnedSlice(self.gpa) catch return &.{});
     }
 
     pub fn caretX(self: *TextSystem, s: []const u8, style: types.TextStyle, index: usize) f32 {
         if (s.len == 0 or index == 0) return 0;
-        return xAt(self.layout(s, style), index);
+        return wrap_mod.xAt(self.layout(s, style), index);
+    }
+
+    pub fn mask(self: *const TextSystem) @import("raster.zig").Mask {
+        var m = self.atlas.mask();
+        const sv = self.slug.view();
+        m.slug_words = sv.words;
+        m.slug_height = sv.height;
+        m.slug_used = sv.used_words;
+        m.slug_resets = self.slug.resets;
+        m.slug_generation = sv.generation ^ (@as(u64, self.slug.resets) *% 0x9e3779b97f4a7c15);
+        return m;
     }
 
     pub fn indexAt(self: *TextSystem, s: []const u8, style: types.TextStyle, x: f32) usize {
@@ -511,86 +540,6 @@ pub const TextSystem = struct {
     }
 };
 
-/// The pen position at byte `at` of a layout.
-fn xAt(lay: Layout, at: usize) f32 {
-    for (lay.glyphs) |g| if (g.index >= at) return g.x;
-    return lay.width;
-}
-
-/// Greedy line breaking over a shaped paragraph.
-fn breakLines(gpa: std.mem.Allocator, lines: *std.ArrayList(Line), s: []const u8, lay: Layout, max: f32) !void {
-    var start: usize = 0;
-    while (start < s.len) {
-        const x0 = xAt(lay, start);
-        var end = start;
-        var last_break: ?usize = null;
-        var previous: u21 = 0;
-        var i = start;
-        while (i < s.len) {
-            if (s[i] == '\n') {
-                end = i;
-                break;
-            }
-            const n = utf8.seqLen(s[i]);
-            const next = @min(s.len, i + n);
-            const current = cjk_break.codepoint(s[i..next]);
-            if (i > start and cjk_break.between(previous, current)) last_break = i;
-            previous = current;
-            // A character that ends past the line, unless it is a space.
-            if (s[i] != ' ' and xAt(lay, next) - x0 > max and i > start) {
-                end = last_break orelse i;
-                break;
-            }
-            if (s[i] == ' ' or s[i] == '-' or s[i] == '/') last_break = next;
-            i = next;
-            end = i;
-        }
-        const trimmed = std.mem.trimEnd(u8, s[start..end], " \t\r");
-        try lines.append(gpa, .{ .start = start, .end = start + trimmed.len, .width = xAt(lay, start + trimmed.len) - x0 });
-        var next_start = end;
-        if (next_start < s.len and s[next_start] == '\n') next_start += 1;
-        while (next_start < s.len and s[next_start] == ' ') next_start += 1;
-        if (next_start == start) next_start += 1;
-        start = next_start;
-        if (start == s.len and end < s.len and s[end] == '\n') try lines.append(gpa, .{ .start = s.len, .end = s.len, .width = 0 });
-    }
-}
-
-test "a character cut off at a string's end is shaped, not decoded short" {
-    var ts = TextSystem.init(std.testing.allocator);
-    defer ts.deinit();
-    // "a→" with the arrow's last byte gone, as a span can end.
-    const w = ts.width("a\xe2\x86", .{ .size = 13 });
-    try std.testing.expect(w > 0);
-}
-
-test "a closing mark takes the character before it to the next line" {
-    var ts = TextSystem.init(std.testing.allocator);
-    defer ts.deinit();
-    const s = "中文中文中文。";
-    const style: types.TextStyle = .{ .size = 13 };
-    const lines = ts.wrap(s, style, ts.width(s, style) - ts.width("。", style) / 2);
-    try std.testing.expectEqual(@as(usize, 2), lines.len);
-    try std.testing.expectEqualStrings("文。", s[lines[1].start..lines[1].end]);
-}
-
-test "ideographs after a Latin word fill the line instead of breaking at its space" {
-    var ts = TextSystem.init(std.testing.allocator);
-    defer ts.deinit();
-    const s = "连接 Agent 或 API，然后继续发送中文消息并等待回复完成";
-    const first = "连接 Agent 或 API，然后继续";
-    const style: types.TextStyle = .{ .size = 13 };
-    const lines = ts.wrap(s, style, ts.width(first, style) + 1);
-    try std.testing.expect(lines.len >= 2);
-    try std.testing.expectEqualStrings(first, s[lines[0].start..lines[0].end]);
-}
-
-test "Latin text still wraps only at spaces" {
-    var ts = TextSystem.init(std.testing.allocator);
-    defer ts.deinit();
-    const s = "alpha beta gamma";
-    const style: types.TextStyle = .{ .size = 13 };
-    const lines = ts.wrap(s, style, ts.width("alpha beta", style) + 1);
-    try std.testing.expectEqual(@as(usize, 2), lines.len);
-    try std.testing.expectEqualStrings("gamma", s[lines[1].start..lines[1].end]);
+test {
+    _ = wrap_mod;
 }

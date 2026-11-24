@@ -6,12 +6,13 @@ const objc = @import("../objc.zig");
 const cf = @import("cf.zig");
 const types = @import("types.zig");
 
-const shader_source = @embedFile("shader.metal") ++ @embedFile("glass.metal") ++ @embedFile("texture_post.metal");
+const shader_source = @embedFile("shader.metal") ++ @embedFile("slug.metal") ++ @embedFile("glass.metal") ++ @embedFile("texture_post.metal");
 
 const gpu = @import("gpu.zig");
 const metal_glass = @import("metal_glass.zig");
 const metal_hdr = @import("metal_hdr.zig");
 const metal_images = @import("metal_images.zig");
+const metal_slug = @import("metal_slug.zig");
 const metal_texture = @import("metal_texture.zig");
 const offscreen = @import("metal_offscreen.zig");
 pub const Instance = gpu.Instance;
@@ -47,6 +48,7 @@ pub const Renderer = struct {
     images_texture: ?objc.Object = null,
     images_generation: u64 = std.math.maxInt(u64),
     images_side: u32 = 0,
+    slug_gpu: metal_slug.SlugGpu = .{},
     layer_textures: std.ArrayList(objc.Object) = .empty,
     layer_w: usize = 0,
     layer_h: usize = 0,
@@ -158,9 +160,10 @@ pub const Renderer = struct {
         return .{ .device = device, .queue = queue, .pipeline = pipeline, .hole = hole, .glass = glass, .layer = layer, .presents = presents, .in_flight = objc.dispatch_semaphore_create(frames_in_flight), .frame_textures = frame_textures, .library = library };
     }
 
-    /// The picture atlas on the GPU (`metal_images.zig`).
+    /// The picture atlas and vector glyph store on the GPU.
     pub const uploadImage = metal_images.uploadImage;
     pub const syncImages = metal_images.syncImages;
+    pub const syncSlug = metal_slug.syncSlug;
 
     pub fn deinit(self: *Renderer) void {
         if (self.images_texture) |t| objc.release(t);
@@ -168,6 +171,7 @@ pub const Renderer = struct {
         self.layer_textures.deinit(std.heap.page_allocator);
         // Wait for the frames in flight: their handlers signal this renderer.
         self.waitIdle();
+        self.slug_gpu.deinit();
         for (&self.held) |*h| {
             self.frame_textures.release(h);
             h.deinit(self.frame_textures.gpa);
@@ -395,6 +399,7 @@ pub const Renderer = struct {
         // Pictures, when there are any; else the atlas stands in (unread).
         objc.msg(void, enc, "setFragmentTexture:atIndex:", .{ self.images_texture orelse atlas, @as(objc.NSUInteger, 1) });
         if (layer_tex) |lt| objc.msg(void, enc, "setFragmentTexture:atIndex:", .{ lt, @as(objc.NSUInteger, 2) });
+        objc.msg(void, enc, "setFragmentTexture:atIndex:", .{ self.slug_gpu.bind(self.device), @as(objc.NSUInteger, 4) });
         objc.msg(void, enc, "drawPrimitives:vertexStart:vertexCount:instanceCount:baseInstance:", .{
             @as(objc.NSUInteger, 4), @as(objc.NSUInteger, 0), @as(objc.NSUInteger, 4), @as(objc.NSUInteger, count), @as(objc.NSUInteger, first), // triangle strip
         });
@@ -536,6 +541,7 @@ pub const Renderer = struct {
             objc.msg(void, cenc, "setFragmentTexture:atIndex:", .{ atlas, @as(objc.NSUInteger, 0) });
             objc.msg(void, cenc, "setFragmentTexture:atIndex:", .{ self.images_texture orelse atlas, @as(objc.NSUInteger, 1) });
             objc.msg(void, cenc, "setFragmentTexture:atIndex:", .{ ltex, @as(objc.NSUInteger, 2) });
+            objc.msg(void, cenc, "setFragmentTexture:atIndex:", .{ self.slug_gpu.bind(self.device), @as(objc.NSUInteger, 4) });
             objc.msg(void, cenc, "drawPrimitives:vertexStart:vertexCount:instanceCount:baseInstance:", .{
                 @as(objc.NSUInteger, 4), @as(objc.NSUInteger, 0), @as(objc.NSUInteger, 4), @as(objc.NSUInteger, 1), @as(objc.NSUInteger, 0),
             });

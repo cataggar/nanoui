@@ -1,10 +1,10 @@
 //! WebGPU object handles and the thin JavaScript import boundary.
 pub const Handle = u32;
-pub const Format = enum(u32) { bgra8unorm, rgba8unorm, r8unorm, rgba16float };
+pub const Format = enum(u32) { bgra8unorm, rgba8unorm, r8unorm, rgba16float, r32uint };
 pub const TextureDesc = extern struct { width: u32, height: u32, format: Format, usage: u32, depth: u32 = 1, dimension: u32 = 2 };
 pub const WriteDesc = extern struct { width: u32, height: u32, bytes_per_row: u32, depth: u32 = 1, x: u32 = 0, y: u32 = 0 };
 /// kind: 0 dynamic uniform, 1 storage, 2 texture, 3 sampler,
-/// 4 external texture, 5 3D texture, 6 non-filtering sampler.
+/// 4 external texture, 5 3D texture, 6 non-filtering sampler, 7 uint texture.
 pub const LayoutEntry = extern struct { binding: u32, visibility: u32, kind: u32 };
 /// kind: 0 buffer, 1 texture view, 2 sampler, 3 external texture.
 /// size=0 binds the whole buffer.
