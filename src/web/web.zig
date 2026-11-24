@@ -138,7 +138,7 @@ pub const Surface = struct {
         s.renderer.before_encode = s.before_encode;
         s.renderer.gradients = s.ctx.gradients.items;
         s.renderer.textures = s.ctx.textures.items;
-        s.renderer.sync(s.text.atlas.mask(), s.text.atlas.generation, s.text.images.pictures(), s.text.images.generation);
+        s.renderer.sync(s.text.mask(), s.text.atlas.generation, s.text.images.pictures(), s.text.images.generation);
         const width: u32 = @intFromFloat(@round(s.size.w * s.scale));
         const height: u32 = @intFromFloat(@round(s.size.h * s.scale));
         const encode_start = now_ms();

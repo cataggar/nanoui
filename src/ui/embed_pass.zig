@@ -17,10 +17,16 @@ pub const Error = error{
 
 fn maskOf(out: contract.FrameOutput) raster.Mask {
     const g = out.glyph_atlas;
+    const vg = out.vector_glyphs;
     const side: usize = g.width;
     return .{
         .pixels = g.pixels,
         .size = if (side == 0 or g.pixels.len < side * side) 0 else g.width,
+        .slug_words = vg.words,
+        .slug_height = vg.height,
+        .slug_used = vg.used_words,
+        .slug_resets = vg.resets,
+        .slug_generation = atlasStamp(vg.generation, vg.resets),
     };
 }
 

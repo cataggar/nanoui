@@ -76,7 +76,7 @@ test "d3d11: a texture draws as the CPU renderer draws it (uv, opacity, clip rad
     pictures.textures = t.ctx.textures.items;
     const cpu = try gpa.alloc(u8, ours.bytes.len);
     defer gpa.free(cpu);
-    raster.draw(.{ .bytes = cpu, .width = ours.width, .height = ours.height }, t.instances.items, t.text.atlas.mask(), pictures, t.scale, t.theme.background);
+    raster.draw(.{ .bytes = cpu, .width = ours.width, .height = ours.height }, t.instances.items, t.text.mask(), pictures, t.scale, t.theme.background);
     var total: u64 = 0;
     var worst: u8 = 0;
     var off: usize = 0;

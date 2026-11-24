@@ -9,12 +9,12 @@ const damage = @import("webgpu_damage.zig");
 const passes = @import("webgpu_passes.zig");
 pub const Target = @import("webgpu_target.zig").Target;
 pub const Params = @import("webgpu_target.zig").Params;
-const wgsl_source = @embedFile("shader.wgsl") ++ "\n" ++ @embedFile("shader_shapes.wgsl") ++ "\n" ++ @embedFile("glass.wgsl");
-const glsl_source = @embedFile("webgl2.glsl") ++ "\n" ++ @embedFile("webgl2_shapes.glsl") ++ "\n" ++ @embedFile("webgl2_glass.glsl");
+const wgsl_source = @embedFile("shader.wgsl") ++ "\n" ++ @embedFile("shader_shapes.wgsl") ++ "\n" ++ @embedFile("shader_slug.wgsl") ++ "\n" ++ @embedFile("glass.wgsl");
+const glsl_source = @embedFile("webgl2.glsl") ++ "\n" ++ @embedFile("webgl2_shapes.glsl") ++ "\n" ++ @embedFile("webgl2_slug.glsl") ++ "\n" ++ @embedFile("webgl2_glass.glsl");
 comptime {
     std.debug.assert(@sizeOf(gpu.Instance) == 192);
     std.debug.assert(@offsetOf(gpu.Instance, "radius") == 80 and @offsetOf(gpu.Instance, "xf") == 96 and @offsetOf(gpu.Instance, "turn") == 144);
-    const kinds = [_][]const u8{ "quad", "text", "shadow", "image", "glass", "shadow_out", "segment", "triangle", "texture", "layer_begin", "layer_end", "layer_composite", "hole" };
+    const kinds = [_][]const u8{ "quad", "text", "shadow", "image", "glass", "shadow_out", "segment", "triangle", "texture", "layer_begin", "layer_end", "layer_composite", "hole", "vector_text" };
     std.debug.assert(@typeInfo(gpu.Kind).@"struct".decl_names.len == kinds.len);
     for (kinds, 0..) |name, index| std.debug.assert(@field(gpu.Kind, name) == @as(f32, @floatFromInt(index)));
 }
@@ -47,6 +47,12 @@ pub const Renderer = struct {
     atlas_view: api.Handle,
     atlas_size: u32 = 1,
     atlas_generation: u64 = std.math.maxInt(u64),
+    slug: api.Handle,
+    slug_view: api.Handle,
+    slug_height: u32 = 0,
+    slug_used: u32 = 0,
+    slug_resets: u64 = std.math.maxInt(u64),
+    slug_generation: u64 = std.math.maxInt(u64),
     images: api.Handle,
     images_view: api.Handle,
     images_size: u32 = 1,
@@ -65,6 +71,7 @@ pub const Renderer = struct {
             .{ .binding = 3, .visibility = 2, .kind = 2 },
             .{ .binding = 4, .visibility = 2, .kind = 2 },
             .{ .binding = 5, .visibility = 2, .kind = 3 },
+            .{ .binding = 6, .visibility = 2, .kind = 7 },
         };
         const layout = api.layout_create(&entries, entries.len);
         const sample_layout = api.layout_create(&.{.{ .binding = 0, .visibility = 2, .kind = 2 }}, 1);
@@ -80,6 +87,7 @@ pub const Renderer = struct {
             });
         }
         const atlas = api.texture_create(&.{ .width = 1, .height = 1, .format = .r8unorm, .usage = 2 | 4 });
+        const slug = api.texture_create(&.{ .width = 1024, .height = 1, .format = .r32uint, .usage = 2 | 4 });
         const images = api.texture_create(&.{ .width = 1, .height = 1, .format = .bgra8unorm, .usage = 2 | 4 });
         var result: Renderer = .{
             .generation = device.generation(),
@@ -94,6 +102,8 @@ pub const Renderer = struct {
             .sampler = api.sampler_create(1),
             .atlas = atlas,
             .atlas_view = api.texture_view(atlas),
+            .slug = slug,
+            .slug_view = api.texture_view(slug),
             .images = images,
             .images_view = api.texture_view(images),
         };
@@ -110,7 +120,7 @@ pub const Renderer = struct {
         r.layers.deinit(std.heap.wasm_allocator);
         r.clearSamples();
         for (r.pipelines) |pair| for (pair) |pipeline| api.release(pipeline);
-        for ([_]api.Handle{ r.shader, r.layout, r.sample_layout, r.external_layout, r.gradient_buffer, r.uniform, r.instances, r.sampler, r.atlas_view, r.atlas, r.images_view, r.images, r.group }) |h| if (h != 0) {
+        for ([_]api.Handle{ r.shader, r.layout, r.sample_layout, r.external_layout, r.gradient_buffer, r.uniform, r.instances, r.sampler, r.atlas_view, r.atlas, r.slug_view, r.slug, r.images_view, r.images, r.group }) |h| if (h != 0) {
             api.release(h);
         };
         r.generation = 0;
@@ -153,6 +163,30 @@ pub const Renderer = struct {
             api.texture_write(r.images, &.{ .width = pictures.size, .height = pictures.size, .bytes_per_row = pictures.size * 4 }, pictures.pixels.ptr, @intCast(pictures.pixels.len));
             r.images_generation = pictures_generation;
         }
+        if (mask.slug_height > 0 and (mask.slug_generation != r.slug_generation or mask.slug_height != r.slug_height) and mask.slug_words.len >= 1024 * @as(usize, mask.slug_height)) {
+            const used: u32 = if (mask.slug_used > 0) @min(mask.slug_used, mask.slug_height * 1024) else mask.slug_height * 1024;
+            const active_rows = @min(mask.slug_height, @max(@as(u32, 1), (used + 1023) / 1024));
+            var full_upload = false;
+            if (mask.slug_height != r.slug_height) {
+                r.invalidate();
+                api.release(r.slug_view);
+                api.release(r.slug);
+                r.slug = api.texture_create(&.{ .width = 1024, .height = mask.slug_height, .format = .r32uint, .usage = 2 | 4 });
+                r.slug_view = api.texture_view(r.slug);
+                r.slug_height = mask.slug_height;
+                full_upload = true;
+            } else if (mask.slug_resets != r.slug_resets or used < r.slug_used) {
+                full_upload = true;
+            }
+            const start_row: u32 = if (full_upload) 0 else @min(active_rows, r.slug_used / 1024);
+            const row_count = active_rows - start_row;
+            if (row_count > 0) {
+                api.texture_write(r.slug, &.{ .width = 1024, .height = row_count, .bytes_per_row = 4096, .x = 0, .y = start_row }, @ptrCast(&mask.slug_words[@as(usize, start_row) * 1024]), row_count * 4096);
+            }
+            r.slug_used = used;
+            r.slug_resets = mask.slug_resets;
+            r.slug_generation = mask.slug_generation;
+        }
     }
     fn replaceAtlas(r: *Renderer, side: u32, picture: bool) void {
         r.invalidate();
@@ -181,7 +215,7 @@ pub const Renderer = struct {
         const visible, const frame_clear = background(instances, size, clear);
         if (r.before_encode == null and frame_clear.a != 0 and damage.Damage.supported(visible)) {
             if (r.retained.backing(width, height, api.preferred_format())) |target| {
-                const regions = r.retained.update(target, scale, frame_clear, .{ r.atlas_generation, r.images_generation, r.image_uploads }, r.gradients, visible, r.textures);
+                const regions = r.retained.update(target, scale, frame_clear, .{ r.atlas_generation, r.images_generation, r.image_uploads, r.slug_generation }, r.gradients, visible, r.textures);
                 if (regions) |rects| if (rects.len == 0) return;
                 r.drawFrame(visible, size, scale, frame_clear, target, time, regions, Target.canvas(width, height));
                 return;
@@ -243,6 +277,7 @@ pub const Renderer = struct {
                 .{ .binding = 3, .kind = 1, .resource = r.atlas_view },
                 .{ .binding = 4, .kind = 1, .resource = r.images_view },
                 .{ .binding = 5, .kind = 2, .resource = r.sampler },
+                .{ .binding = 6, .kind = 1, .resource = r.slug_view },
             };
             r.group = api.bind_group_create(r.layout, &bindings, bindings.len);
         }

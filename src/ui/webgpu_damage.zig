@@ -60,7 +60,7 @@ pub const Damage = struct {
 
     /// Null requests a full repaint. An empty slice leaves the previous
     /// presentation in place while the editor continues to step.
-    pub fn update(d: *Damage, target: Target, scale: f32, clear: Color, versions: [3]u64, gradients: []const [4]f32, instances: []const gpu.Instance, textures: []const gpu.Texture) ?[]const Rect {
+    pub fn update(d: *Damage, target: Target, scale: f32, clear: Color, versions: [4]u64, gradients: []const [4]f32, instances: []const gpu.Instance, textures: []const gpu.Texture) ?[]const Rect {
         const columns = std.math.divCeil(u32, target.width, tile) catch unreachable;
         const rows = std.math.divCeil(u32, target.height, tile) catch unreachable;
         d.next.resize(allocator, @as(usize, columns) * rows) catch {
@@ -77,6 +77,8 @@ pub const Damage = struct {
             var hash = std.hash.Wyhash.hash(0, std.mem.asBytes(i));
             if (i.kind == gpu.Kind.text) {
                 hash = std.hash.Wyhash.hash(hash, std.mem.asBytes(&versions[0]));
+            } else if (i.kind == gpu.Kind.vector_text) {
+                hash = std.hash.Wyhash.hash(hash, std.mem.asBytes(&versions[3]));
             } else if (i.kind == gpu.Kind.image) {
                 hash = std.hash.Wyhash.hash(hash, std.mem.asBytes(versions[1..3]));
             } else if (i.kind == gpu.Kind.quad and i.uv[1] > 1.5) {

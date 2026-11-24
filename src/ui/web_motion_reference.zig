@@ -21,9 +21,9 @@ pub fn render(t: *ui.Tester, gpa: std.mem.Allocator) !gpu.Pixels {
     const w: usize = @intFromFloat(t.size.w * t.scale);
     const h: usize = @intFromFloat(t.size.h * t.scale);
     const out: gpu.Pixels = .{ .bytes = try gpa.alloc(u8, w * h * 4), .width = w, .height = h };
-    raster.draw(out, &.{}, t.text.atlas.mask(), t.text.images.pictures(), t.scale, t.theme.background);
+    raster.draw(out, &.{}, t.text.mask(), t.text.images.pictures(), t.scale, t.theme.background);
     for (t.instances.items) |*i| {
-        if (i.kind == gpu.Kind.quad and (i.xf[1] != 0 or i.pulse[0] > 0 or i.turn[0] != 0 or i.vel[0] != 0 or i.vel[1] != 0)) quad(out, i, t.scale, @floatCast(t.ctx.time)) else raster.drawOne(out, i, t.text.atlas.mask(), t.text.images.pictures(), t.scale, .{ 0, 0, w, h });
+        if (i.kind == gpu.Kind.quad and (i.xf[1] != 0 or i.pulse[0] > 0 or i.turn[0] != 0 or i.vel[0] != 0 or i.vel[1] != 0)) quad(out, i, t.scale, @floatCast(t.ctx.time)) else raster.drawOne(out, i, t.text.mask(), t.text.images.pictures(), t.scale, .{ 0, 0, w, h });
     }
     return out;
 }

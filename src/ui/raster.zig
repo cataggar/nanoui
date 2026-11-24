@@ -5,6 +5,8 @@
 //! matches the Metal renderer.
 const std = @import("std");
 pub const shapes = @import("raster_shapes.zig");
+pub const xform = @import("raster_xform.zig");
+const raster_slug = @import("raster_slug.zig");
 const pictures_mod = @import("raster_picture.zig");
 const picture = pictures_mod.picture;
 const Source = pictures_mod.Source;
@@ -25,6 +27,7 @@ pub const Mask = struct {
     /// analyses with their own gamma and contrast, not the system default's.
     classic_text_params: @import("text_blend.zig").Params = .{},
     classic_gray_params: @import("text_blend.zig").Params = .{},
+    slug_words: []const u32 = &.{}, slug_height: u32 = 0, slug_used: u32 = 0, slug_resets: u64 = 0, slug_generation: u64 = 0,
 };
 
 /// The image atlas: BGRA premultiplied, `size` × `size` (empty: none).
@@ -159,146 +162,14 @@ const Band = struct {
     }
 };
 
-/// The pixels (x0, y0, x1, y1) in which a frame of `new` instances differs
-/// from one of `old`, both drawn `width` × `height` with the same atlases;
-/// null when none do. The instances both frames start and end with are
-/// the same; between them, those that changed cover what changed. Glass
-/// reads what's behind it from beyond its bounds: with glass, all of it.
-pub fn damage(width: usize, height: usize, old: []const gpu.Instance, new: []const gpu.Instance, scale: f32) ?[4]usize {
-    const out: gpu.Pixels = .{ .bytes = &.{}, .width = width, .height = height };
-    for (new) |*i| if (i.kind == gpu.Kind.glass) return .{ 0, 0, width, height };
-    var start: usize = 0;
-    while (start < old.len and start < new.len and same(&old[start], &new[start])) start += 1;
-    var old_end = old.len;
-    var new_end = new.len;
-    while (old_end > start and new_end > start and same(&old[old_end - 1], &new[new_end - 1])) {
-        old_end -= 1;
-        new_end -= 1;
-    }
-    const before = old[start..old_end];
-    const after = new[start..new_end];
-    var region: ?[4]usize = null;
-    if (before.len == after.len) {
-        // The same number in between: only the pairs that differ.
-        for (before, after) |*a, *b| if (!same(a, b)) {
-            cover(&region, bounds(out, a, scale));
-            cover(&region, bounds(out, b, scale));
-        };
-    } else {
-        for (before) |*a| cover(&region, bounds(out, a, scale));
-        for (after) |*b| cover(&region, bounds(out, b, scale));
-    }
-    return region;
-}
-fn same(a: *const gpu.Instance, b: *const gpu.Instance) bool {
-    return std.mem.eql(u8, std.mem.asBytes(a), std.mem.asBytes(b));
-}
+pub const damage = xform.damage;
+pub const unmatrix = xform.unmatrix;
+pub const pixelAt = xform.pixelAt;
+pub const unrotate = xform.unrotate;
+pub const bounds = xform.bounds;
 
-fn cover(region: *?[4]usize, b: ?[4]usize) void {
-    const add = b orelse return;
-    region.* = if (region.*) |r| .{ @min(r[0], add[0]), @min(r[1], add[1]), @max(r[2], add[2]), @max(r[3], add[3]) } else add;
-}
 pub fn unit(v: f32) u8 {
     return @intFromFloat(@round(std.math.clamp(v, 0, 1) * 255));
-}
-/// Where a pixel is before the instance's plane transform (`Instance.m`).
-pub inline fn unmatrix(i: *const gpu.Instance, wx: f32, wy: f32) [2]f32 {
-    if (!gpu.hasMatrix(i)) return .{ wx, wy };
-    const det = i.m[0] * i.m[3] - i.m[1] * i.m[2];
-    if (@abs(det) < 1e-9) return .{ -1e9, -1e9 };
-    const dx = wx - i.mt[0];
-    const dy = wy - i.mt[1];
-    return .{ (i.m[3] * dx - i.m[2] * dy) / det, (i.m[0] * dy - i.m[1] * dx) / det };
-}
-
-/// A pixel's size where a shape is worked out: what a `fwidth` of it finds.
-pub inline fn pixelAt(i: *const gpu.Instance, inv: f32) f32 {
-    if (!gpu.hasMatrix(i)) return inv;
-    return inv / @max(@sqrt(@abs(i.m[0] * i.m[3] - i.m[1] * i.m[2])), 1e-3);
-}
-
-pub inline fn unrotate(i: *const gpu.Instance, wx_in: f32, wy_in: f32) [2]f32 {
-    const p = unmatrix(i, wx_in, wy_in);
-    if (i.kind == gpu.Kind.texture) if (gpu.affine(i)) |m| {
-        // The map's inverse, about the pivot: back into the box's own
-        // coordinates. A map that flattens the box to a line shows nothing.
-        const det = m[0] * m[3] - m[1] * m[2];
-        if (@abs(det) < 1e-9) return .{ -1e9, -1e9 };
-        const dx = p[0] - i.xf[2];
-        const dy = p[1] - i.xf[3];
-        return .{ i.xf[2] + (m[3] * dx - m[1] * dy) / det, i.xf[3] + (-m[2] * dx + m[0] * dy) / det };
-    };
-    const a = i.xf[0];
-    if (a == 0) return p;
-    const dx = p[0] - i.xf[2];
-    const dy = p[1] - i.xf[3];
-    const ca = @cos(a);
-    const sa = @sin(a);
-    return .{ i.xf[2] + ca * dx + sa * dy, i.xf[3] - sa * dx + ca * dy };
-}
-
-/// The pixels an instance covers: its quad (grown for a shadow's blur),
-/// within its clip and the frame.
-pub fn bounds(out: gpu.Pixels, i: *const gpu.Instance, scale: f32) ?[4]usize {
-    const grow: f32 = if (i.kind == gpu.Kind.shadow or i.kind == gpu.Kind.shadow_out) i.border_width * 3 else 0;
-    var rx0 = i.rect[0] - grow;
-    var ry0 = i.rect[1] - grow;
-    var rx1 = i.rect[0] + i.rect[2] + grow;
-    var ry1 = i.rect[1] + i.rect[3] + grow;
-    const map = gpu.affine(i);
-    if (i.xf[0] != 0 or map != null) {
-        const ca = @cos(i.xf[0]);
-        const sa = @sin(i.xf[0]);
-        const m = map orelse [4]f32{ ca, -sa, sa, ca };
-        const px = i.xf[2];
-        const py = i.xf[3];
-        const xs = [4]f32{ rx0, rx1, rx0, rx1 };
-        const ys = [4]f32{ ry0, ry0, ry1, ry1 };
-        rx0 = 1e9;
-        ry0 = 1e9;
-        rx1 = -1e9;
-        ry1 = -1e9;
-        for (0..4) |k| {
-            const dx = xs[k] - px;
-            const dy = ys[k] - py;
-            const tx = px + m[0] * dx + m[1] * dy;
-            const ty = py + m[2] * dx + m[3] * dy;
-            rx0 = @min(rx0, tx);
-            ry0 = @min(ry0, ty);
-            rx1 = @max(rx1, tx);
-            ry1 = @max(ry1, ty);
-        }
-    }
-    if (gpu.hasMatrix(i)) {
-        const xs = [4]f32{ rx0, rx1, rx0, rx1 };
-        const ys = [4]f32{ ry0, ry0, ry1, ry1 };
-        rx0 = 1e9;
-        ry0 = 1e9;
-        rx1 = -1e9;
-        ry1 = -1e9;
-        for (xs, ys) |x, y| {
-            const tx = i.m[0] * x + i.m[2] * y + i.mt[0];
-            const ty = i.m[1] * x + i.m[3] * y + i.mt[1];
-            rx0 = @min(rx0, tx);
-            ry0 = @min(ry0, ty);
-            rx1 = @max(rx1, tx);
-            ry1 = @max(ry1, ty);
-        }
-    }
-    const x0 = @max(rx0, i.clip[0]);
-    const y0 = @max(ry0, i.clip[1]);
-    const x1 = @min(rx1, i.clip[2]);
-    const y1 = @min(ry1, i.clip[3]);
-    if (x1 <= x0 or y1 <= y0) return null;
-    const w: f32 = @floatFromInt(out.width);
-    const h: f32 = @floatFromInt(out.height);
-    // A pixel is drawn when its center is inside, as the GPU rasterizes.
-    const px0 = std.math.clamp(@round(x0 * scale), 0, w);
-    const py0 = std.math.clamp(@round(y0 * scale), 0, h);
-    const px1 = std.math.clamp(@round(x1 * scale), 0, w);
-    const py1 = std.math.clamp(@round(y1 * scale), 0, h);
-    if (px1 <= px0 or py1 <= py0) return null;
-    return .{ @intFromFloat(px0), @intFromFloat(py0), @intFromFloat(px1), @intFromFloat(py1) };
 }
 
 pub fn drawOne(out: gpu.Pixels, i: *const gpu.Instance, mask: Mask, pictures: Pictures, scale: f32, region: [4]usize) void {
@@ -311,6 +182,7 @@ pub fn drawOnePtr(out: gpu.Pixels, i: *const gpu.Instance, mask: *const Mask, pi
     const b: [4]usize = .{ @max(all[0], region[0]), @max(all[1], region[1]), @min(all[2], region[2]), @min(all[3], region[3]) };
     if (b[2] <= b[0] or b[3] <= b[1]) return;
     if (i.kind == gpu.Kind.text) return @import("raster_glyph.zig").glyph(out, i, mask, scale, b);
+    if (i.kind == gpu.Kind.vector_text) return raster_slug.vectorGlyph(out, i, mask, scale, b);
     if (i.kind == gpu.Kind.image) {
         const src = Source.atlas(pictures);
         return pic.picture(out, i, &src, scale, b);
@@ -448,7 +320,7 @@ fn quad(out: gpu.Pixels, i: *const gpu.Instance, gradients: []const [4]f32, scal
     const corner_ext: f32 = if (r > 0) 1.52866495 * r else r_abs;
     const edge_pad = (if (has_border) bw else 0) + 2 * @max(local_px, 0.0001);
     const solid = @max(corner_ext, edge_pad);
-    const rot = i.xf[0] != 0 or gpu.hasMatrix(i);
+    const rot = xform.hasTransform(i);
     const span_narrow = if (!rot and i.clip_round == 0) innerSpanX(b, cx, hw - solid, scale, inv) else [2]usize{ b[2], b[2] };
     const span_wide = if (!rot and i.clip_round == 0) innerSpanX(b, cx, hw - edge_pad, scale, inv) else [2]usize{ b[2], b[2] };
     for (b[1]..b[3]) |y| {
@@ -487,13 +359,24 @@ fn quad(out: gpu.Pixels, i: *const gpu.Instance, gradients: []const [4]f32, scal
             const x_end = if (has_span and seg == 0) sp[0] else b[2];
             for (x_start..x_end) |x| {
                 const wx = (@as(f32, @floatFromInt(x)) + 0.5) * inv;
-                const u = unrotate(i, wx, wy);
-                if (rot and (u[0] < i.rect[0] or u[1] < i.rect[1] or u[0] > i.rect[0] + i.rect[2] or u[1] > i.rect[1] + i.rect[3])) continue;
-                if (grad and rot) c = mixColor(i.color, bottom, (u[1] - i.rect[1]) / @max(i.rect[3], 1e-4));
-                if (stops and rot) c = gpu.gradientAt(gradients, i.uv, u[1] - i.rect[1]);
+                var u: [2]f32 = .{ wx, wy };
+                var landed: [2]f32 = .{ wx, wy };
+                if (rot) {
+                    if (i.turn[0] != 0 or i.vel[2] == 2.0) {
+                        const pt = xform.inverseFrame(.{ wx, wy }, i) orelse continue;
+                        if (!xform.inClip(i, pt.landed)) continue;
+                        u = pt.unrot;
+                        landed = pt.landed;
+                    } else {
+                        u = unrotate(i, wx, wy);
+                    }
+                    if (u[0] < i.rect[0] or u[1] < i.rect[1] or u[0] > i.rect[0] + i.rect[2] or u[1] > i.rect[1] + i.rect[3]) continue;
+                    if (grad) c = mixColor(i.color, bottom, (u[1] - i.rect[1]) / @max(i.rect[3], 1e-4));
+                    if (stops) c = gpu.gradientAt(gradients, i.uv, u[1] - i.rect[1]);
+                }
                 const pxl = u[0] - cx;
                 const py = u[1] - cy;
-                const cut = clipCover(i, wx, wy, inv);
+                const cut = clipCover(i, landed[0], landed[1], inv);
                 if ((inner_y and @abs(pxl) < hw - edge_pad) or (edge_inner_y and @abs(pxl) < hw - solid)) {
                     const a = c[3] * cut;
                     blend(out.bytes, row + x * 4, c[0] * a, c[1] * a, c[2] * a, a);
@@ -558,7 +441,7 @@ fn shadow(out: gpu.Pixels, i: *const gpu.Instance, scale: f32, b: [4]usize) void
     const r: f32 = if (i.radius < 0) -r_abs else r_abs;
     const sigma = @max(i.border_width, 0.25);
     const inv = 1 / scale;
-    const rot = i.xf[0] != 0 or gpu.hasMatrix(i);
+    const rot = xform.hasTransform(i);
     for (b[1]..b[3]) |y| {
         const wy = (@as(f32, @floatFromInt(y)) + 0.5) * inv;
         const row = y * out.width * 4;
@@ -569,19 +452,28 @@ fn shadow(out: gpu.Pixels, i: *const gpu.Instance, scale: f32, b: [4]usize) void
         }
         for (b[0]..b[2]) |x| {
             const wx = (@as(f32, @floatFromInt(x)) + 0.5) * inv;
-            const cut = clipCover(i, wx, wy, inv);
-            if (cut <= 0) continue;
+            var landed: [2]f32 = .{ wx, wy };
             var pxl: f32 = wx - cx;
             var py: f32 = wy - cy;
             var sa: f32 = undefined;
             if (rot) {
-                const up = unrotate(i, wx, wy);
+                var up: [2]f32 = undefined;
+                if (i.turn[0] != 0 or i.vel[2] == 2.0) {
+                    const pt = xform.inverseFrame(.{ wx, wy }, i) orelse continue;
+                    if (!xform.inClip(i, pt.landed)) continue;
+                    up = pt.unrot;
+                    landed = pt.landed;
+                } else {
+                    up = unrotate(i, wx, wy);
+                }
                 pxl = up[0] - cx;
                 py = up[1] - cy;
                 sa = shapes.shadowAlpha(pxl, py, hw, hh, r, sigma);
             } else {
                 sa = shapes.shadowRowAlpha(&sr, pxl);
             }
+            const cut = clipCover(i, landed[0], landed[1], inv);
+            if (cut <= 0) continue;
             var a = sa * c[3] * cut;
             // Knocked out: nothing inside the box (`uv` its offset from the shadow's rect).
             if (i.kind == gpu.Kind.shadow_out) {
@@ -594,4 +486,9 @@ fn shadow(out: gpu.Pixels, i: *const gpu.Instance, scale: f32, b: [4]usize) void
             if (a > 0) blend(out.bytes, row + x * 4, c[0] * a, c[1] * a, c[2] * a, a);
         }
     }
+}
+
+test {
+    _ = xform;
+    _ = raster_slug;
 }

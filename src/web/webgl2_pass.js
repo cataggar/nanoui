@@ -9,6 +9,7 @@ const SAMPLER_UNITS = [
   ["u_atlas", 3],
   ["u_source1", 3],
   ["u_images", 4],
+  ["u_slug", 5],
   ["u_lut", 5],
   ["u_source_lut", 6],
 ];
@@ -25,7 +26,7 @@ const PIPELINE_KINDS = {
 };
 
 function makePreamble(stageMacro, entryMacro) {
-  return `#version 300 es\n#define ${stageMacro} 1\n#define ${entryMacro} 1\nprecision highp float;\nprecision highp int;\nprecision highp sampler2D;\nprecision highp sampler3D;\n`;
+  return `#version 300 es\n#define ${stageMacro} 1\n#define ${entryMacro} 1\nprecision highp float;\nprecision highp int;\nprecision highp sampler2D;\nprecision highp usampler2D;\nprecision highp sampler3D;\n`;
 }
 
 function compileStage(gl, type, source, diagnostics, label) {
@@ -47,7 +48,7 @@ function compileStage(gl, type, source, diagnostics, label) {
 }
 
 export function createPassOps(state) {
-  const bound2D = [null, null, null, null, null];
+  const bound2D = [null, null, null, null, null, null];
   const decoder = new TextDecoder();
 
   function bindTex2D(gl, unit, glTex) {
@@ -259,6 +260,7 @@ export function createPassOps(state) {
           const samp = b[5]?.resource?.glSampler ?? state.linearClampSampler;
           if (b[3]) { bindTex2D(gl, 3, (b[3].resource.texture ?? b[3].resource).glTex); gl.bindSampler(3, samp); }
           if (b[4]) { bindTex2D(gl, 4, (b[4].resource.texture ?? b[4].resource).glTex); gl.bindSampler(4, samp); }
+          if (b[6]) { bindTex2D(gl, 5, (b[6].resource.texture ?? b[6].resource).glTex); gl.bindSampler(5, null); }
         } else {
           const pointSamp = b[4]?.resource?.glSampler ?? state.nearestClampSampler;
           const linSamp = b[7]?.resource?.glSampler ?? state.linearClampSampler;

@@ -233,7 +233,7 @@ pub const Surface = struct {
             }
             const r = &self.renderer.?;
             self.text.images.device_side = opengl.Renderer.maxTextureSide();
-            r.sync(self.text.atlas.mask(), self.text.atlas.generation, self.text.images.pictures(), self.text.images.generation);
+            r.sync(self.text.mask(), self.text.atlas.generation, self.text.images.pictures(), self.text.images.generation);
             r.draw(self.instances.items, self.size, self.scale, self.ctx.theme.background, 0, self.ctx.time);
             if (g.swap()) return;
             app.cpuFromNow();

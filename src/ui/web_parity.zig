@@ -9,6 +9,7 @@ const Motion = @import("web_motion_reference.zig");
 const TextureScene = @import("web_texture_tests.zig").Scene;
 const Effects = @import("web_scenes.zig").Effects;
 const Canvas = @import("tests_canvas.zig").Scene;
+const SlugScene = @import("tests_slug.zig").Scene;
 const gpa = std.heap.wasm_allocator;
 
 var fonts_ready = false;
@@ -19,6 +20,7 @@ var glass: Glass = .{};
 var effects: Effects = .{};
 var motion: Motion.Scene = .{};
 var texture_scene: TextureScene = .{};
+var slug_scene: SlugScene = .{};
 var tester: ?*ui.Tester = null;
 var renderer: ?webgpu.Renderer = null;
 var target: ?webgpu.Target = null;
@@ -37,7 +39,7 @@ export fn parity_draw(scene: u32, scale: f32, format: u32) u32 {
 
 fn draw(scene: u32, scale: f32, format: u32) !void {
     if (shown != null and !ready) return error.ReadPending;
-    if (scene > 18 or (scale != 1 and scale != 2) or format > 1) return error.InvalidScene;
+    if (scene > 19 or (scale != 1 and scale != 2) or format > 1) return error.InvalidScene;
     if (!fonts_ready) {
         if (!ui.registerFont(@embedFile("web_fonts/DejaVuSans.ttf")) or !ui.registerFont(@embedFile("web_fonts/DejaVuSans-Bold.ttf"))) return error.Font;
         fonts_ready = true;
@@ -62,6 +64,7 @@ fn draw(scene: u32, scale: f32, format: u32) !void {
         2, 3 => ui.View.init(&glass, Glass.view),
         4 => ui.View.init(&effects, Effects.view),
         13 => ui.View.init(&motion, Motion.Scene.view),
+        19 => ui.View.init(&slug_scene, SlugScene.view),
         else => ui.View.init(&texture_scene, TextureScene.view),
     };
     t.init(gpa, view, .{ .width = if (scene == 1) 240 else 360, .height = if (scene == 1) 180 else 300, .scale = scale, .dark = scene == 3 }) catch |err| {
@@ -87,8 +90,11 @@ fn draw(scene: u32, scale: f32, format: u32) !void {
     r.before_encode = if (scene == 10) .{ .ctx = &texture_scene, .func = TextureScene.encode } else null;
     // Each scene has a fresh TextSystem and Images with fresh generations.
     r.atlas_generation = std.math.maxInt(u64);
+    r.slug_used = 0;
+    r.slug_resets = std.math.maxInt(u64);
+    r.slug_generation = std.math.maxInt(u64);
     r.images_generation = std.math.maxInt(u64);
-    r.sync(t.text.atlas.mask(), t.text.atlas.generation, if (scene == 16) .{} else t.text.images.pictures(), t.text.images.generation);
+    r.sync(t.text.mask(), t.text.atlas.generation, if (scene == 16) .{} else t.text.images.pictures(), t.text.images.generation);
     r.draw(t.instances.items, t.size, scale, t.theme.background, target.?, t.ctx.time);
     r.readInto(target.?, shown.?, t, completed);
 }
@@ -116,6 +122,7 @@ fn compare() !u32 {
         if (d > 8) off += 1;
     }
     mean = @as(f64, @floatFromInt(total)) / @as(f64, @floatFromInt(cpu.bytes.len));
+    if (scene_id == 19) return if (mean < 0.02 and worst <= 8 and off * 1000 < cpu.bytes.len) 0 else 2;
     if ((scene_id >= 5 and scene_id <= 15 and scene_id != 13) or scene_id >= 17) return if (mean < 0.5 and worst <= 24 and off * 200 < cpu.bytes.len) 0 else 2;
     const glass_scene = scene_id == 2 or scene_id == 3;
     return if (mean < (if (glass_scene) @as(f64, 0.1) else 0.05) and worst <= (if (glass_scene) @as(u8, 24) else if (scene_id == 1) @as(u8, 32) else 16) and off * (if (glass_scene) @as(usize, 500) else 1000) < cpu.bytes.len) 0 else 2;

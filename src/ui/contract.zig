@@ -46,6 +46,7 @@ comptime {
     std.debug.assert(@offsetOf(gpu.Instance, "turn") == 144);
     std.debug.assert(@offsetOf(gpu.Instance, "m") == 160);
     std.debug.assert(@offsetOf(gpu.Instance, "mt") == 176);
+    std.debug.assert(Kind.vector_text == 13);
 }
 
 /// Sub-rectangle modified in an atlas since the previous `Host.frame` call.
@@ -88,6 +89,16 @@ pub const ImageAtlas = struct {
     dirty: ?DirtyRect = null,
 };
 
+/// Packed 1024-wide `R32_UINT` Slug vector glyph word table (`slug_store.zig`).
+pub const VectorGlyphTable = struct {
+    words: []const u32 = &.{},
+    width: u32 = 1024,
+    height: u32 = 0,
+    used_words: u32 = 0,
+    generation: u64 = 0,
+    resets: u64 = 0,
+};
+
 pub const CursorState = struct {
     shape: ctx_mod.Cursor = .arrow,
     custom: ?*anyopaque = null,
@@ -122,6 +133,7 @@ pub const FrameOutput = struct {
     textures: []const gpu.Texture,
     glyph_atlas: GlyphAtlas,
     image_atlas: ImageAtlas,
+    vector_glyphs: VectorGlyphTable = .{},
     cursor: CursorState,
     clipboard_write: ?[]const u8,
     ime: ?ImeState,

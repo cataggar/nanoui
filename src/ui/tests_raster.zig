@@ -66,6 +66,7 @@ fn compare() !void {
     defer t.deinit();
     t.settle(1);
     t.renderer.syncImages(&t.text.images);
+    t.renderer.syncSlug(&t.text.slug);
     const metal = try t.renderer.drawOffscreen(gpa, t.instances.items, t.text.texture(), t.size, t.scale, t.theme.background);
     defer metal.deinit(gpa);
     const texels = try t.text.atlas.read(gpa);
@@ -73,7 +74,8 @@ fn compare() !void {
     const cpu_bytes = try gpa.alloc(u8, metal.bytes.len);
     defer gpa.free(cpu_bytes);
     const cpu: @TypeOf(metal) = .{ .bytes = cpu_bytes, .width = metal.width, .height = metal.height };
-    raster.draw(cpu, t.instances.items, .{ .pixels = texels, .size = t.text.atlas.size }, t.text.images.pictures(), t.scale, t.theme.background);
+    const sv = t.text.slugView();
+    raster.draw(cpu, t.instances.items, .{ .pixels = texels, .size = t.text.atlas.size, .slug_words = sv.words, .slug_height = sv.height, .slug_generation = sv.generation }, t.text.images.pictures(), t.scale, t.theme.background);
 
     var total: u64 = 0;
     var off: usize = 0;
@@ -336,7 +338,7 @@ fn partial() !void {
     t.settle(1);
     const d = raster.damage(w, h, before, t.instances.items, t.scale) orelse return error.NoDamage;
     try testing.expect((d[2] - d[0]) * (d[3] - d[1]) < w * h / 2);
-    raster.drawRegion(pixels, t.instances.items, t.text.atlas.mask(), t.text.images.pictures(), t.scale, t.theme.background, d);
+    raster.drawRegion(pixels, t.instances.items, t.text.mask(), t.text.images.pictures(), t.scale, t.theme.background, d);
     const whole = try t.render(gpa);
     defer whole.deinit(gpa);
     try testing.expectEqualSlices(u8, whole.bytes, pixels.bytes);
@@ -349,8 +351,8 @@ fn partial() !void {
     while (fewer.items[k].kind != @import("gpu.zig").Kind.text) k += 1;
     _ = fewer.orderedRemove(k);
     const e = raster.damage(w, h, t.instances.items, fewer.items, t.scale) orelse return error.NoDamage;
-    raster.drawRegion(pixels, fewer.items, t.text.atlas.mask(), t.text.images.pictures(), t.scale, t.theme.background, e);
-    raster.draw(whole, fewer.items, t.text.atlas.mask(), t.text.images.pictures(), t.scale, t.theme.background);
+    raster.drawRegion(pixels, fewer.items, t.text.mask(), t.text.images.pictures(), t.scale, t.theme.background, e);
+    raster.draw(whole, fewer.items, t.text.mask(), t.text.images.pictures(), t.scale, t.theme.background);
     try testing.expectEqualSlices(u8, whole.bytes, pixels.bytes);
 }
 

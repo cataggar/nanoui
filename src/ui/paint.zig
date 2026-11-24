@@ -5,8 +5,8 @@ const types = @import("types.zig");
 const metal = @import("gpu.zig");
 const glass = @import("glass.zig");
 const xform = @import("paint_xform.zig");
+const paint_slug = @import("paint_slug.zig");
 const text_mod = @import("text.zig");
-const native_windows = @import("dwrite.zig").enabled;
 const rich = text_mod.rich;
 const ctx_mod = @import("context.zig");
 const Context = ctx_mod.Context;
@@ -19,7 +19,7 @@ pub fn paint(c: *Context, out: *std.ArrayList(metal.Instance)) void {
     c.scrollbars.clearRetainingCapacity();
     c.text.images.beginPaint();
     c.layers.clearRetainingCapacity();
-    paintNode(c, out, 0, types.Rect.infinite, 1, false, 0);
+    paintNode(c, out, 0, types.Rect.infinite, 1, false, 0, false);
     // Higher layers over the page, lowest first; within one, in tree order.
     var done: usize = 0;
     while (done < c.layers.items.len) {
@@ -32,7 +32,7 @@ pub fn paint(c: *Context, out: *std.ArrayList(metal.Instance)) void {
         const idx = c.layers.items[done];
         done += 1;
         c.layer_root = idx;
-        paintNode(c, out, idx, types.Rect.infinite, 1, false, 0);
+        paintNode(c, out, idx, types.Rect.infinite, 1, false, 0, false);
     }
     c.layer_root = std.math.maxInt(u32);
 }
@@ -101,11 +101,12 @@ fn partOf(uv: [4]f32, p: [4]f32) [4]f32 {
 }
 
 /// `scrolled`: how far the scrolling boxes it's in have scrolled it up.
-fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip_in: types.Rect, opacity_in: f32, selectable_in: bool, scrolled: f32) void {
+fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip_in: types.Rect, opacity_in: f32, selectable_in: bool, scrolled: f32, xform_in: bool) void {
     // Painting never changes the tree: borrow the node rather than copying
     // its entire style and content for every row, including clipped ones.
     const n: *const ctx_mod.Node = c.node(index);
     const st = &n.style;
+    const xform_here = xform_in or paint_slug.hasGeometricTransform(c, n);
     // A higher layer is drawn later, over the page.
     if (st.layer > 0 and index != c.layer_root) {
         c.layers.append(c.gpa, index) catch {};
@@ -194,7 +195,7 @@ fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip_
             .clip = clip4,
         });
         switch (n.content) {
-            .text => |*t| paintText(c, out, index, n, t, clip4, opacity, selectable, moving),
+            .text => |*t| paintText(c, out, index, n, t, clip4, opacity, selectable, moving, t.style.vector or (c.auto_vector_text and xform_here)),
             .icon => |ic| if (c.text.atlas.symbol(ic.name, ic.size, @backingInt(ic.weight))) |sp| {
                 // Centered in its box, which may be larger (a fixed frame).
                 const inner = r.inset(st.padding);
@@ -263,7 +264,7 @@ fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip_
         c.painting_group = true;
         push(c, out, .{ .rect = .{ visible.x, visible.y, visible.w, visible.h }, .color = .{ 1, 1, 1, 1 }, .kind = metal.Kind.layer_begin, .clip = metal.clip4(child_clip) });
     }
-    while (child != none) : (child = c.node(child).next) paintNode(c, out, child, child_clip, if (masked) 1 else opacity, selectable, inner_scrolled);
+    while (child != none) : (child = c.node(child).next) paintNode(c, out, child, child_clip, if (masked) 1 else opacity, selectable, inner_scrolled, xform_here);
     if (masked) {
         c.painting_group = was_group;
         push(c, out, .{
@@ -279,11 +280,14 @@ fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip_
     if (st.scroll or st.scroll_x) {
         @import("scroll.zig").paintScrollbars(c, out, n, visible, opacity);
     }
-    if (st.scale != 1) scaleItems(out.items[start..], box_r, @max(st.scale, 0), st.scale_anchor, clip4);
+    if (st.scale != 1) scaleItems(out.items[start..], box_r, @max(st.scale, 0), st.scale_anchor, clip4, c.scale);
     if (st.transform) |m| xform.apply(out.items[start..], c.next_hits.items[hits_from..], m, clip_in);
     if (proj[0] != 0 or proj[1] != 0) for (out.items[start..]) |*it| {
         it.rect[0] += proj[0];
         it.rect[1] += proj[1];
+        if ((it.kind == metal.Kind.text or it.kind == metal.Kind.vector_text) and it.border_width > 0) {
+            it.radius += proj[0];
+        }
         if (it.kind == metal.Kind.segment or it.kind == metal.Kind.triangle) {
             it.uv = .{ it.uv[0] + proj[0], it.uv[1] + proj[1], it.uv[2] + proj[0], it.uv[3] + proj[1] };
             if (it.kind == metal.Kind.triangle) {
@@ -330,7 +334,7 @@ fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip_
             const vy = r.y - prev.y;
             if (@sqrt(vx * vx + vy * vy) > 2) {
                 for (out.items[start..]) |*inst| {
-                    if (inst.kind == metal.Kind.quad or inst.kind == metal.Kind.text or inst.kind == metal.Kind.image) {
+                    if (inst.kind == metal.Kind.quad or inst.kind == metal.Kind.text or inst.kind == metal.Kind.vector_text or inst.kind == metal.Kind.image) {
                         inst.vel = .{ vx * 0.5, vy * 0.5, inst.vel[2], inst.vel[3] };
                     }
                 }
@@ -342,11 +346,12 @@ fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip_
 /// Maps instances around the anchor of `box` (fractions of it) by `s`,
 /// still within `outer`, the clip the box was given. Glass keeps its
 /// bezel and rim (`uv`, in points) as they are.
-fn scaleItems(items: []metal.Instance, box: types.Rect, s: f32, anchor: types.Point, outer: [4]f32) void {
+fn scaleItems(items: []metal.Instance, box: types.Rect, s: f32, anchor: types.Point, outer: [4]f32, dpi_scale: f32) void {
     const ax = box.x + box.w * anchor.x;
     const ay = box.y + box.h * anchor.y;
     for (items) |*i| {
         i.rect = .{ ax + (i.rect[0] - ax) * s, ay + (i.rect[1] - ay) * s, i.rect[2] * s, i.rect[3] * s };
+        paint_slug.snapScaledVectorQuad(i, dpi_scale);
         if (i.xf[0] != 0 or i.xf[1] != 0 or i.pulse[0] > 0) {
             i.xf[2] = ax + (i.xf[2] - ax) * s;
             i.xf[3] = ay + (i.xf[3] - ay) * s;
@@ -360,7 +365,11 @@ fn scaleItems(items: []metal.Instance, box: types.Rect, s: f32, anchor: types.Po
             @max(outer[0], ax + (i.clip[0] - ax) * s), @max(outer[1], ay + (i.clip[1] - ay) * s),
             @min(outer[2], ax + (i.clip[2] - ax) * s), @min(outer[3], ay + (i.clip[3] - ay) * s),
         };
-        i.radius *= s;
+        if (i.kind == metal.Kind.text or i.kind == metal.Kind.vector_text) {
+            if (i.border_width > 0) i.radius = ax + (i.radius - ax) * s;
+        } else {
+            i.radius *= s;
+        }
         // A border's width, a shadow's blur, a pane's backdrop blur.
         i.border_width *= s;
         if (i.kind == metal.Kind.shadow_out) i.uv = .{ i.uv[0] * s, i.uv[1] * s, i.uv[2] * s, 0 };
@@ -369,7 +378,8 @@ fn scaleItems(items: []metal.Instance, box: types.Rect, s: f32, anchor: types.Po
     }
 }
 
-fn paintText(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, n: *const ctx_mod.Node, t: *const ctx_mod.Content.Text, clip4: [4]f32, opacity: f32, selectable: bool, moving: bool) void {
+fn paintText(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, n: *const ctx_mod.Node, t: *const ctx_mod.Content.Text, clip4: [4]f32, opacity: f32, selectable: bool, moving: bool, use_vector: bool) void {
+    const vec = use_vector and !c.slug_overflow_fallback;
     const sel: ?Sel = if (selectable) .{ .id = n.id, .index = index, .x0 = n.rect.x, .x1 = n.rect.x + n.rect.w } else null;
     const inner = n.rect.inset(n.style.padding);
     const inner_right = n.rect.x + n.rect.w;
@@ -378,12 +388,12 @@ fn paintText(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, n: *c
     if (t.style.wrap) {
         for (t.lines, 0..) |l, i| {
             const y = inner.y + lh * @as(f32, @floatFromInt(i));
-            textRun(c, out, t, l.start, l.end, inner.x, y, f, lh, clip4, opacity, sel, inner_right, moving);
+            textRun(c, out, t, l.start, l.end, inner.x, y, f, lh, clip4, opacity, sel, inner_right, moving, vec);
         }
     } else if (t.style.truncate != .none) {
-        truncated(c, out, t, inner, inner_right, f, lh, clip4, opacity, sel, moving);
+        truncated(c, out, t, inner, inner_right, f, lh, clip4, opacity, sel, moving, vec);
     } else {
-        textRun(c, out, t, 0, t.str.len, inner.x, inner.y, f, lh, clip4, opacity, sel, inner_right, moving);
+        textRun(c, out, t, 0, t.str.len, inner.x, inner.y, f, lh, clip4, opacity, sel, inner_right, moving, vec);
     }
 }
 
@@ -406,16 +416,16 @@ fn paintShadow(c: *Context, out: *std.ArrayList(metal.Instance), sh: types.Shado
 
 /// Where a truncated line ends, and over how many points it fades out
 /// before that (0: cut there).
-const Limit = struct { end: f32, fade: f32 = 0 };
+const Limit = paint_slug.Limit;
 
 /// A line that may be longer than its box: whole if it fits; else cut at a
 /// glyph before an ellipsis, or drawn to the box's end, fading out.
-fn truncated(c: *Context, out: *std.ArrayList(metal.Instance), t: *const ctx_mod.Content.Text, inner: types.Rect, inner_right: f32, f: text_mod.Font, lh: f32, clip4: [4]f32, opacity: f32, sel: ?Sel, moving: bool) void {
+fn truncated(c: *Context, out: *std.ArrayList(metal.Instance), t: *const ctx_mod.Content.Text, inner: types.Rect, inner_right: f32, f: text_mod.Font, lh: f32, clip4: [4]f32, opacity: f32, sel: ?Sel, moving: bool, use_vector: bool) void {
     const lay = t.cut_lay orelse c.text.layout(t.str, t.style);
-    if (lay.width <= inner.w + 0.5) return textRun(c, out, t, 0, t.str.len, inner.x, inner.y, f, lh, clip4, opacity, sel, inner_right, moving);
+    if (lay.width <= inner.w + 0.5) return textRun(c, out, t, 0, t.str.len, inner.x, inner.y, f, lh, clip4, opacity, sel, inner_right, moving, use_vector);
     if (t.style.truncate == .fade) {
         const limit: Limit = .{ .end = inner.x + inner.w, .fade = @min(t.style.fade_width, inner.w / 2) };
-        return textRunLimit(c, out, t, 0, t.str.len, inner.x, inner.y, f, lh, clip4, opacity, sel, limit, inner_right, moving);
+        return textRunLimit(c, out, t, 0, t.str.len, inner.x, inner.y, f, lh, clip4, opacity, sel, limit, inner_right, moving, use_vector);
     }
     const ellipsis = "\u{2026}";
     const room = inner.w - c.text.width(ellipsis, t.style);
@@ -431,11 +441,11 @@ fn truncated(c: *Context, out: *std.ArrayList(metal.Instance), t: *const ctx_mod
     while (cut > 0 and t.str[cut - 1] == ' ') cut -= 1;
     if (cut > 0) cut_x = c.text.layout(t.str[0..cut], t.style).width;
     const limit: Limit = .{ .end = inner.x + inner.w };
-    if (cut > 0) textRunLimit(c, out, t, 0, cut, inner.x, inner.y, f, lh, clip4, opacity, sel, limit, inner_right, moving);
+    if (cut > 0) textRunLimit(c, out, t, 0, cut, inner.x, inner.y, f, lh, clip4, opacity, sel, limit, inner_right, moving, use_vector);
     var dots = t.*;
     dots.str = ellipsis;
     dots.spans = &.{};
-    textRunLimit(c, out, &dots, 0, ellipsis.len, inner.x + cut_x, inner.y, f, lh, clip4, opacity, null, limit, inner_right, moving);
+    textRunLimit(c, out, &dots, 0, ellipsis.len, inner.x + cut_x, inner.y, f, lh, clip4, opacity, null, limit, inner_right, moving, use_vector);
 }
 
 /// Draws bytes [start, end) of `t`, each glyph in its span's color.
@@ -443,11 +453,11 @@ fn truncated(c: *Context, out: *std.ArrayList(metal.Instance), t: *const ctx_mod
 /// horizontal extent.
 const Sel = struct { id: u64, index: u32, x0: f32, x1: f32 };
 
-fn textRun(c: *Context, out: *std.ArrayList(metal.Instance), t: *const ctx_mod.Content.Text, start: usize, end: usize, x: f32, y: f32, f: text_mod.Font, lh: f32, clip4: [4]f32, opacity: f32, sel: ?Sel, inner_right: f32, moving: bool) void {
-    textRunLimit(c, out, t, start, end, x, y, f, lh, clip4, opacity, sel, null, inner_right, moving);
+fn textRun(c: *Context, out: *std.ArrayList(metal.Instance), t: *const ctx_mod.Content.Text, start: usize, end: usize, x: f32, y: f32, f: text_mod.Font, lh: f32, clip4: [4]f32, opacity: f32, sel: ?Sel, inner_right: f32, moving: bool, use_vector: bool) void {
+    textRunLimit(c, out, t, start, end, x, y, f, lh, clip4, opacity, sel, null, inner_right, moving, use_vector);
 }
 
-fn textRunLimit(c: *Context, out: *std.ArrayList(metal.Instance), t: *const ctx_mod.Content.Text, start: usize, end: usize, x: f32, y: f32, f: text_mod.Font, lh: f32, clip4: [4]f32, opacity: f32, sel: ?Sel, limit: ?Limit, inner_right: f32, moving: bool) void {
+fn textRunLimit(c: *Context, out: *std.ArrayList(metal.Instance), t: *const ctx_mod.Content.Text, start: usize, end: usize, x: f32, y: f32, f: text_mod.Font, lh: f32, clip4: [4]f32, opacity: f32, sel: ?Sel, limit: ?Limit, inner_right: f32, moving: bool, use_vector: bool) void {
     const style = t.style;
     // Cull lines wholly above or below the clip before shaping them; a
     // selectable one still counts for where the pointer is.
@@ -471,59 +481,18 @@ fn textRunLimit(c: *Context, out: *std.ArrayList(metal.Instance), t: *const ctx_
         y + (lh - f.ascent - f.descent) / 2 + f.ascent
     else
         y + (lh - f.lineHeight()) / 2 + f.leading / 2 + f.ascent;
-    const baseline = if (gpui_snap) halfTowardZero(raw_baseline * scale) / scale else if (moving) raw_baseline else snap(raw_baseline, scale);
+    const baseline = if (use_vector) raw_baseline else if (gpui_snap) halfTowardZero(raw_baseline * scale) / scale else if (moving) raw_baseline else snap(raw_baseline, scale);
     const base = metal.color4(t.color.alpha(opacity));
     if (sel) |s| if (y <= clip4[3] and y + lh >= clip4[1]) @import("selection.zig").line(c, out, s.id, s.index, t.str, start, end, lay, x, y, lh, s.x0, s.x1, clip4);
     if (t.spans.len > 0) @import("paint_decor.zig").decorations(c, out, t, lay, start, end, x, .{ .top = y, .h = lh, .baseline = baseline }, f, clip4, opacity);
+    if (use_vector) return paint_slug.emitVectorText(c, out, t, lay, start, x, raw_baseline, base, clip4, opacity, limit, inner_right);
     var span_i: usize = 0;
     for (lay.glyphs) |g| {
-        const pen = (x + g.x) * scale;
-        if (pen / scale > clip4[2]) break;
-        if (limit) |l| if (pen / scale >= l.end) break;
-        const positions: f32 = if (native_windows) @floatFromInt(c.text.positions(g)) else text_mod.subpixel_bins;
-        // DirectWrite keeps its per-face phase count (including grid fitting).
-        const quantized = if (gpui_snap) halfTowardZero(pen * positions) / positions else if (native_windows) @round(pen * positions) / positions else pen;
-        const px = @floor(quantized);
-        const phase = (quantized - px) * text_mod.subpixel_bins;
-        const bin: u8 = @intFromFloat(@min(text_mod.subpixel_bins - 1, if (native_windows) @round(phase) else @floor(phase + if (gpui_snap) @as(f32, 0.001) else 0)));
-        var color = base;
-        var tone = t.color;
-        if (t.spans.len > 0) {
-            const at = start + g.index;
-            while (span_i < t.spans.len and t.spans[span_i].end <= at) span_i += 1;
-            // Glyphs of a run are mostly in order; a ligature or bidi may step back.
-            if (span_i < t.spans.len and t.spans[span_i].start > at) {
-                span_i = 0;
-                while (span_i < t.spans.len and t.spans[span_i].end <= at) span_i += 1;
-            }
-            if (span_i < t.spans.len and t.spans[span_i].start <= at) if (t.spans[span_i].color) |sc| {
-                color = metal.color4(sc.alpha(opacity));
-                tone = sc;
-            };
-        }
-        if (style.fade) |fd| {
-            color[3] *= std.math.clamp((inner_right - fd.clear - (x + g.x)) / @max(fd.ramp, 0.001), 0, 1);
-            if (color[3] <= 0) continue;
-        }
-        // Lighter text is drawn with thicker strokes, as macOS draws it.
-        const sp = c.text.glyph(g, bin, @TypeOf(c.text.*).dilationFor(tone.r, tone.g, tone.b)) orelse continue;
-        var uv = sp.uv;
-        if (!text_mod.portable and 0.2126 * color[0] + 0.7152 * color[1] + 0.0722 * color[2] < 0.5) {
-            const du = uv[2] - uv[0];
-            uv[0] += du;
-            uv[2] += du;
-        }
-        push(c, out, .{
-            .rect = .{ px / scale + sp.x, baseline - g.y + sp.y, sp.w, sp.h },
-            .color = color,
-            .uv = uv,
-            .kind = metal.Kind.text,
-            // A fading line: its glyphs fade out toward `end`, and are
-            // cut there (the shader reads these for glyphs).
-            .radius = if (limit) |l| l.end else 0,
-            .border_width = if (limit) |l| l.fade else 0,
-            .clip = if (limit) |l| .{ clip4[0], clip4[1], @min(clip4[2], l.end), clip4[3] } else clip4,
-        });
+        const gx = x + g.x;
+        if (gx > clip4[2]) break;
+        if (limit) |l| if (gx >= l.end) break;
+        const resolved = paint_slug.resolveGlyphColor(t, &span_i, start + g.index, gx, base, opacity, inner_right) orelse continue;
+        paint_slug.emitBitmapGlyph(c, out, g, x, baseline, resolved.color, resolved.tone, clip4, limit);
     }
 }
 

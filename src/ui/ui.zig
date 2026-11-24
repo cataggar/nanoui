@@ -354,6 +354,7 @@ test {
     const os = @import("builtin").os.tag;
     _ = contract;
     _ = embed;
+    _ = @import("slug_store.zig");
     _ = @import("tests_embed.zig");
     _ = @import("tests_shader_sync.zig");
     _ = @import("tests_ruler.zig");
@@ -441,6 +442,7 @@ test {
     }
     _ = @import("raster.zig");
     _ = @import("tests_raster.zig");
+    _ = @import("tests_slug.zig");
     _ = @import("tests_raster_groups.zig");
     _ = @import("raster_group.zig");
     _ = @import("glass.zig");

@@ -12,7 +12,7 @@ const cf = if (available) @import("cf.zig") else struct {};
 const metal = if (available) @import("metal.zig") else struct {};
 const metal_glass = if (available) @import("metal_glass.zig") else struct {};
 const metal_texture = if (available) @import("metal_texture.zig") else struct {};
-const shader_source = @embedFile("shader.metal") ++ @embedFile("glass.metal") ++ @embedFile("texture_post.metal");
+const shader_source = @embedFile("shader.metal") ++ @embedFile("slug.metal") ++ @embedFile("glass.metal") ++ @embedFile("texture_post.metal");
 
 pub const Encoder = if (available) AppleEncoder else struct {
     pub fn init(_: ?*anyopaque) !@This() {
@@ -27,6 +27,7 @@ pub const Encoder = if (available) AppleEncoder else struct {
 
 const AppleEncoder = struct {
     const r8_format: objc.NSUInteger = 10;
+    const r32_uint_format: objc.NSUInteger = 53;
     const bgra8_format: objc.NSUInteger = 80;
     const Region = extern struct { x: usize, y: usize, z: usize, w: usize, h: usize, d: usize };
     const LayerTex = struct { tex: ?objc.Object = null, w: objc.NSUInteger = 0, h: objc.NSUInteger = 0 };
@@ -37,12 +38,15 @@ const AppleEncoder = struct {
     pipeline: objc.Object,
     hole: objc.Object,
     fallback_atlas: objc.Object,
+    fallback_slug: objc.Object,
     glass: metal_glass.Glass,
     frame_textures: metal_texture.Textures,
     queue: ?objc.Object = null,
     target_format: objc.NSUInteger = bgra8_format,
     glyph_slot: AtlasSlot = .{},
     image_slot: AtlasSlot = .{},
+    slug_slot: AtlasSlot = .{},
+    active_slug: ?objc.Object = null,
     buffers: [3]?objc.Object = @splat(null),
     capacities: [3]usize = @splat(0),
     tex_held: [3]std.ArrayList(*anyopaque) = @splat(.empty),
@@ -74,8 +78,11 @@ const AppleEncoder = struct {
         try ftex.initPost(device, lib);
         errdefer ftex.deinit();
         const fallback = newTex(device, r8_format, 1, 1, 1, 0) orelse return error.TextureCreate;
+        errdefer objc.release(fallback);
         uploadRect(fallback, 0, 0, 1, 1, &[1]u8{0}, 1);
-        return .{ .device = device, .library = lib, .pipeline = pipes.main, .hole = pipes.hole, .fallback_atlas = fallback, .glass = glass, .frame_textures = ftex };
+        const fb_slug = newTex(device, r32_uint_format, 1, 1, 1, 0) orelse return error.TextureCreate;
+        uploadRect(fb_slug, 0, 0, 1, 1, &[4]u8{ 0, 0, 0, 0 }, 4);
+        return .{ .device = device, .library = lib, .pipeline = pipes.main, .hole = pipes.hole, .fallback_atlas = fallback, .fallback_slug = fb_slug, .glass = glass, .frame_textures = ftex };
     }
     pub fn deinit(self: *AppleEncoder) void {
         const pool = objc.Pool.push();
@@ -92,10 +99,10 @@ const AppleEncoder = struct {
         for (&self.buffers) |*b| if (b.*) |buf| objc.release(buf);
         for (self.layers.items) |l| if (l.tex) |t| objc.release(t);
         self.layers.deinit(gpa);
-        for ([_]?objc.Object{ self.glyph_slot.texture, self.image_slot.texture, self.queue }) |o| if (o) |x| objc.release(x);
+        for ([_]?objc.Object{ self.glyph_slot.texture, self.image_slot.texture, self.slug_slot.texture, self.queue }) |o| if (o) |x| objc.release(x);
         self.frame_textures.deinit();
         self.glass.deinit();
-        for ([_]objc.Object{ self.fallback_atlas, self.hole, self.pipeline, self.library, self.device }) |o| objc.release(o);
+        for ([_]objc.Object{ self.fallback_slug, self.fallback_atlas, self.hole, self.pipeline, self.library, self.device }) |o| objc.release(o);
     }
     pub fn drawTexture(self: *AppleEncoder, target_texture: *anyopaque, out: contract.FrameOutput) !void {
         const pool = objc.Pool.push();
@@ -121,8 +128,12 @@ const AppleEncoder = struct {
         self.time = @floatCast(out.time);
         const g = out.glyph_atlas;
         const im = out.image_atlas;
+        const vg = out.vector_glyphs;
         const atlas = self.syncAtlas(&self.glyph_slot, g.pixels, g.width, g.height, 1, r8_format, g.generation, g.resets, g.dirty_from_generation, g.dirty, slot) orelse self.fallback_atlas;
         const images = self.syncAtlas(&self.image_slot, im.pixels, im.width, im.height, 4, bgra8_format, im.generation, im.resets, im.dirty_from_generation, im.dirty, slot) orelse atlas;
+        const slug_rows: u32 = if (vg.width > 0 and vg.height > 0) @min(vg.height, @max(@as(u32, 1), (vg.used_words + vg.width - 1) / vg.width)) else 0;
+        const slug_dirty: ?contract.DirtyRect = if (slug_rows > 0) .{ .x = 0, .y = 0, .width = vg.width, .height = slug_rows } else null;
+        self.active_slug = self.syncAtlas(&self.slug_slot, std.mem.sliceAsBytes(vg.words), vg.width, vg.height, 4, r32_uint_format, vg.generation, vg.resets, self.slug_slot.generation, slug_dirty, slot) orelse self.fallback_slug;
         const ec = contract.effectiveClear(out.instances, out.size, out.clear_color);
         const buf = (if (ec.first < out.instances.len) self.uploadFrame(slot, out.instances, out.gradients) else null) orelse return endPass(metal.Renderer.pass(cmd, target, ec.clear));
         self.frame_textures.prepare(self.device, cmd, out.textures, &self.tex_held[slot]);
@@ -238,7 +249,7 @@ const AppleEncoder = struct {
     fn drawRange(self: *AppleEncoder, enc: objc.Object, pipe: objc.Object, buf: objc.Object, atlas: objc.Object, images: objc.Object, layer_tex: objc.Object, frame_tex: objc.Object, size: types.Size, base: usize, count: usize) void {
         self.bindBase(enc, pipe, buf, size);
         objc.msg(void, enc, "setFragmentBuffer:offset:atIndex:", .{ buf, @as(objc.NSUInteger, self.grad_offset), @as(objc.NSUInteger, 3) });
-        for ([_]objc.Object{ atlas, images, layer_tex, frame_tex }, 0..) |t, idx| objc.msg(void, enc, "setFragmentTexture:atIndex:", .{ t, @as(objc.NSUInteger, idx) });
+        for ([_]objc.Object{ atlas, images, layer_tex, frame_tex, self.active_slug orelse self.fallback_slug }, 0..) |t, idx| objc.msg(void, enc, "setFragmentTexture:atIndex:", .{ t, @as(objc.NSUInteger, idx) });
         drawInstanced(enc, count, base);
     }
     fn bindBase(self: *const AppleEncoder, enc: objc.Object, pipe: objc.Object, buf: objc.Object, size: types.Size) void {

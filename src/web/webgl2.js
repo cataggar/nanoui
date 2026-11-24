@@ -1,7 +1,7 @@
 import { createExternalSources } from "./external.js";
 import { createPassOps } from "./webgl2_pass.js";
 
-const FORMATS = ["bgra8unorm", "rgba8unorm", "r8unorm", "rgba16float"];
+const FORMATS = ["bgra8unorm", "rgba8unorm", "r8unorm", "rgba16float", "r32uint"];
 const STORAGE_TEX_WIDTH = 1024, STORAGE_ROW_BYTES = 16384, STORAGE_ROW_FLOATS = 4096;
 
 export const WEBGL2_CONTEXT_ATTRIBUTES = {
@@ -245,8 +245,8 @@ export function createWebGL2({ gl, canvas = null, memory, done, generation = 1 }
         });
       }
       gl.bindTexture(gl.TEXTURE_2D, glTex);
-      setup2DParams(gl.LINEAR);
-      gl.texImage2D(gl.TEXTURE_2D, 0, f === 2 ? gl.R8 : f === 3 ? gl.RGBA16F : gl.RGBA8, width, height, 0, f === 2 ? gl.RED : gl.RGBA, f === 3 ? gl.HALF_FLOAT : gl.UNSIGNED_BYTE, null);
+      setup2DParams(f === 4 ? gl.NEAREST : gl.LINEAR);
+      gl.texImage2D(gl.TEXTURE_2D, 0, f === 2 ? gl.R8 : f === 3 ? gl.RGBA16F : f === 4 ? gl.R32UI : gl.RGBA8, width, height, 0, f === 2 ? gl.RED : f === 4 ? gl.RED_INTEGER : gl.RGBA, f === 3 ? gl.HALF_FLOAT : f === 4 ? gl.UNSIGNED_INT : gl.UNSIGNED_BYTE, null);
       const texObj = {
         kind: "texture", glTex, fbo: null, fboGl: ownerGl, fboGen: ownerGen, width, height, depth: 1, dimension: 2,
         target: gl.TEXTURE_2D, format: FORMATS[f] ?? "rgba8unorm", formatIndex: f, srgb: false,
@@ -273,6 +273,15 @@ export function createWebGL2({ gl, canvas = null, memory, done, generation = 1 }
         return;
       }
       gl.bindTexture(gl.TEXTURE_2D, tex.glTex);
+      if (tex.formatIndex === 4) {
+        const rowPixels = bytesPerRow === width * 4 ? 0 : Math.floor(bytesPerRow / 4);
+        if (rowPixels) gl.pixelStorei(gl.UNPACK_ROW_LENGTH, rowPixels);
+        const count = n >>> 2;
+        const srcWords = (sPtr & 3) === 0 ? words(sPtr, count) : new Uint32Array(bytes(sPtr, count * 4).slice().buffer);
+        gl.texSubImage2D(gl.TEXTURE_2D, 0, x, y, width, height, gl.RED_INTEGER, gl.UNSIGNED_INT, srcWords);
+        if (rowPixels) gl.pixelStorei(gl.UNPACK_ROW_LENGTH, 0);
+        return;
+      }
       if (tex.formatIndex === 0) {
         const needed = width * height * 4, raw = bytes(sPtr, n);
         if (swizzleScratch.length < needed) swizzleScratch = new Uint8Array(needed);

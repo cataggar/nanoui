@@ -15,6 +15,8 @@ const fonts = @import("fonts.zig");
 const utf8 = @import("utf8.zig");
 const stacks = @import("text_stack_mac.zig");
 const registry = @import("font_registry.zig");
+const slug_store = @import("slug_store.zig");
+const slug_glyph = @import("slug_glyph.zig");
 pub const rich = @import("rich.zig");
 const glyph_wrap = @import("text_mac_wrap.zig");
 
@@ -88,6 +90,7 @@ fn fontKey(style: types.TextStyle) FontKey {
 pub const TextSystem = struct {
     gpa: std.mem.Allocator,
     atlas: Atlas,
+    slug: slug_store.Store = .{},
     /// The pictures shown (`ui.image`).
     images: @import("images.zig").Images,
     scale: f32 = 2,
@@ -96,6 +99,7 @@ pub const TextSystem = struct {
     run_fonts: std.ArrayList(cf.CTFontRef) = .empty,
     /// Each run font's points of outline added (a bold it lacks).
     run_strokes: std.ArrayList(f32) = .empty,
+    run_face_keys: std.ArrayList(u64) = .empty,
     /// The fonts of each style that names families (`TextStyle.family`).
     stacks: std.AutoHashMapUnmanaged(FontKey, ?*stacks.Stack) = .empty,
     /// Installed families by name.
@@ -145,6 +149,7 @@ pub const TextSystem = struct {
         for (self.run_fonts.items) |f| cf.CFRelease(f);
         self.run_fonts.deinit(self.gpa);
         self.run_strokes.deinit(self.gpa);
+        self.run_face_keys.deinit(self.gpa);
         self.dropStacks();
         self.stacks.deinit(self.gpa);
         self.installed.deinit();
@@ -157,6 +162,7 @@ pub const TextSystem = struct {
         self.scratch_points.deinit(self.gpa);
         self.scratch_bytes_of.deinit(self.gpa);
         self.scratch_indices.deinit(self.gpa);
+        self.slug.deinit(self.gpa);
         self.atlas.deinit();
     }
 
@@ -195,6 +201,7 @@ pub const TextSystem = struct {
         for (self.run_fonts.items) |f| cf.CFRelease(f);
         self.run_fonts.clearRetainingCapacity();
         self.run_strokes.clearRetainingCapacity();
+        self.run_face_keys.clearRetainingCapacity();
         self.dropStacks();
         self.installed.clear();
         freeLayouts(self.gpa, &self.layouts);
@@ -314,6 +321,7 @@ pub const TextSystem = struct {
     /// Called at the start of every frame: layouts unused for two frames go.
     pub fn beginFrame(self: *TextSystem) void {
         self.atlas.reset_during_frame = false;
+        self.slug.clearResetFlag();
         self.syncFonts();
         if (self.layouts.count() >= 4096) {
             freeLayouts(self.gpa, &self.previous);
@@ -379,7 +387,7 @@ pub const TextSystem = struct {
         return cf.attributed(s, self.font(style).ref);
     }
 
-    fn line(self: *TextSystem, s: []const u8, style: types.TextStyle) cf.CTLineRef {
+    pub fn line(self: *TextSystem, s: []const u8, style: types.TextStyle) cf.CTLineRef {
         const attr = self.attributedOf(s, style);
         defer cf.CFRelease(attr);
         return cf.CTLineCreateWithAttributedString(attr).?;
@@ -537,6 +545,19 @@ pub const TextSystem = struct {
 
     pub const dilationFor = @import("atlas.zig").dilationFor;
 
+    pub fn slugView(self: *const TextSystem) slug_store.View {
+        return self.slug.view();
+    }
+
+    pub fn vectorGlyph(self: *TextSystem, lay: *const Layout, run_idx: usize, glyph_id: u16) ?slug_store.Entry {
+        _ = lay;
+        return slug_glyph.vectorGlyphMac(self, run_idx, glyph_id);
+    }
+
+    pub fn runFontSize(self: *const TextSystem, run_idx: usize, fallback: f32) f32 {
+        return slug_glyph.runFontSizeMac(self, run_idx, fallback);
+    }
+
     /// The width of `s` on one line.
     pub fn width(self: *TextSystem, s: []const u8, style: types.TextStyle) f32 {
         if (s.len == 0) return 0;
@@ -555,42 +576,11 @@ pub const TextSystem = struct {
         return self.wrapAttributed(s, style, &.{}, max_width);
     }
 
-    /// `s` with its spans broken into lines no wider than `max_width`.
-    pub fn wrapAttributed(self: *TextSystem, s: []const u8, style: types.TextStyle, spans: []const types.Span, max_width: f32) []const Line {
-        return glyph_wrap.wrapAttributed(self, s, style, spans, max_width);
-    }
-
-    /// `s` broken as GPUI breaks it, each newline-delimited paragraph alone.
-    pub fn breakAtGlyphs(self: *TextSystem, s: []const u8, style: types.TextStyle, spans: []const types.Span, max_width: f32) ![]Line {
-        return glyph_wrap.breakAtGlyphs(self, s, style, spans, max_width);
-    }
-
+    pub const wrapAttributed = glyph_wrap.wrapAttributed;
+    pub const breakAtGlyphs = glyph_wrap.breakAtGlyphs;
     pub const isWordChar = glyph_wrap.isWordChar;
-
-    pub fn oneLine(self: *TextSystem, s: []const u8, style: types.TextStyle, spans: []const types.Span, max_width: f32) ?Line {
-        return glyph_wrap.oneLine(self, s, style, spans, max_width);
-    }
-
-    pub fn breakLines(self: *TextSystem, s: []const u8, style: types.TextStyle, spans: []const types.Span, max_width: f32) ![]Line {
-        return glyph_wrap.breakLines(self, s, style, spans, max_width);
-    }
-
-    /// The x offset of the caret before byte `index` of `s`.
-    pub fn caretX(self: *TextSystem, s: []const u8, style: types.TextStyle, index: usize) f32 {
-        const to = @min(index, s.len);
-        if (to == 0) return 0;
-        if (shaper.isSimpleAscii(s[0..to]) and style.family == null) return self.layout(s[0..to], style).width;
-        const l = self.line(s, style);
-        defer cf.CFRelease(l);
-        return @floatCast(cf.CTLineGetOffsetForStringIndex(l, cf.utf16Offset(s, to), null));
-    }
-
-    /// The byte index of the caret position nearest to `x`.
-    pub fn indexAt(self: *TextSystem, s: []const u8, style: types.TextStyle, x: f32) usize {
-        if (s.len == 0) return 0;
-        const l = self.line(s, style);
-        defer cf.CFRelease(l);
-        const i = cf.CTLineGetStringIndexForPosition(l, .{ .x = x, .y = 0 });
-        return if (i < 0) s.len else cf.byteOffset(s, i);
-    }
+    pub const oneLine = glyph_wrap.oneLine;
+    pub const breakLines = glyph_wrap.breakLines;
+    pub const caretX = glyph_wrap.caretX;
+    pub const indexAt = glyph_wrap.indexAt;
 };

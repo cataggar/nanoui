@@ -12,9 +12,10 @@ const gpu = @import("gpu.zig");
 const raster = @import("raster.zig");
 const text_blend = @import("text_blend.zig");
 const d3d11_glass = @import("d3d11_glass.zig");
+const d3d11_slug = @import("d3d11_slug.zig");
 const d3d11_texture = @import("d3d11_texture.zig");
 const d3d11_hdr = @import("d3d11_hdr.zig");
-pub const source = @embedFile("shader.hlsl") ++ @embedFile("corner_sdf.hlsl") ++ @embedFile("hdr.hlsl");
+pub const source = @embedFile("slug.hlsl") ++ "\n" ++ @embedFile("shader.hlsl") ++ "\n" ++ @embedFile("corner_sdf.hlsl") ++ "\n" ++ @embedFile("glass.hlsl") ++ "\n" ++ @embedFile("hdr.hlsl");
 
 const api = @import("d3d11_glue.zig");
 const Target = api.Target;
@@ -22,7 +23,6 @@ const texture2D = api.texture2D;
 const textureSrv = api.textureSrv;
 const uploadAtlas = api.uploadAtlas;
 const Com = api.Com;
-const Blob = api.Blob;
 const HRESULT = api.HRESULT;
 const Texture2DDesc = api.Texture2DDesc;
 const BufferDesc = api.BufferDesc;
@@ -34,8 +34,6 @@ const BlendDesc = api.BlendDesc;
 const RasterizerDesc = api.RasterizerDesc;
 const SamplerDesc = api.SamplerDesc;
 const Params = api.Params;
-const D3D11CreateDevice = api.D3D11CreateDevice;
-const D3DCompile = api.d3dCompile;
 const check = api.check;
 const must = api.must;
 const bgra8 = api.bgra8;
@@ -51,14 +49,11 @@ const map_write_discard = api.map_write_discard;
 const misc_structured = api.misc_structured;
 const srv_buffer = api.srv_buffer;
 const topology_strip = api.topology_strip;
-const sdk_version = api.sdk_version;
-const bgra_support = api.bgra_support;
 const VSSetConstantBuffers = api.VSSetConstantBuffers;
 const PSSetShaderResources = api.PSSetShaderResources;
 const PSSetShader = api.PSSetShader;
 const PSSetSamplers = api.PSSetSamplers;
 const VSSetShader = api.VSSetShader;
-const Draw = api.Draw;
 const Map = api.Map;
 const Unmap = api.Unmap;
 const PSSetConstantBuffers = api.PSSetConstantBuffers;
@@ -70,14 +65,11 @@ const OMSetRenderTargets = api.OMSetRenderTargets;
 const OMSetBlendState = api.OMSetBlendState;
 const RSSetState = api.RSSetState;
 const RSSetViewports = api.RSSetViewports;
-const CopyResource = api.CopyResource;
 const CopySubresourceRegion = api.CopySubresourceRegion;
-const UpdateSubresource = api.UpdateSubresource;
 const ClearRenderTargetView = api.ClearRenderTargetView;
 const CreateBuffer = api.CreateBuffer;
 const CreateTexture2D = api.CreateTexture2D;
 const CreateShaderResourceView = api.CreateShaderResourceView;
-const CreateRenderTargetView = api.CreateRenderTargetView;
 const CreateVertexShader = api.CreateVertexShader;
 const CreatePixelShader = api.CreatePixelShader;
 const CreateBlendState = api.CreateBlendState;
@@ -126,6 +118,7 @@ pub const Renderer = struct {
     atlas_generation: u64 = std.math.maxInt(u64),
     images_size: u32 = 0,
     images_generation: u64 = std.math.maxInt(u64),
+    slug: d3d11_slug.Slug = .{},
     text_params: text_blend.Params = .{},
     classic_text_params: text_blend.Params = .{},
     classic_gray_params: text_blend.Params = .{},
@@ -241,10 +234,12 @@ pub const Renderer = struct {
         try check(dev.slot(*const fn (*Com, *const SamplerDesc, *?*Com) callconv(.winapi) HRESULT, CreateSamplerState)(dev, &sd, @ptrCast(&r.sampler)));
         const cb: BufferDesc = .{ .byte_width = @sizeOf(Params), .bind = bind_constant };
         try check(dev.slot(*const fn (*Com, *const BufferDesc, ?*const anyopaque, *?*Com) callconv(.winapi) HRESULT, CreateBuffer)(dev, &cb, null, @ptrCast(&r.params)));
+        r.slug.initFallback(dev, ctx);
         return r;
     }
 
     pub fn deinit(r: *Renderer) void {
+        r.slug.deinit();
         if (r.instance_srv) |v| v.release();
         if (r.instances) |b| b.release();
         if (r.atlas_srv) |t| t.release();
@@ -317,6 +312,7 @@ pub const Renderer = struct {
                 r.images_srv = textureSrv(r.device, t);
             }
         }
+        r.slug.sync(r.device, r.context, mask);
     }
 
     /// Draws `instances` over `clear`, `size` points at `scale`, into the
@@ -498,8 +494,8 @@ pub const Renderer = struct {
         g.slot(*const fn (*Com, ?*Com, ?*const anyopaque, u32) callconv(.winapi) void, PSSetShader)(g, ps, null, 0);
         var inst = [1]?*Com{r.instance_srv};
         g.slot(*const fn (*Com, u32, u32, [*]const ?*Com) callconv(.winapi) void, VSSetShaderResources)(g, 0, 1, &inst);
-        var views = [6]?*Com{ r.instance_srv, r.atlas_srv, r.images_srv, r.a.srv, r.native_atlas_srv, r.bound_texture };
-        g.slot(*const fn (*Com, u32, u32, [*]const ?*Com) callconv(.winapi) void, PSSetShaderResources)(g, 0, 6, &views);
+        var views = [7]?*Com{ r.instance_srv, r.atlas_srv, r.images_srv, r.a.srv, r.native_atlas_srv, r.bound_texture, r.slug.view(r.device, r.context) };
+        g.slot(*const fn (*Com, u32, u32, [*]const ?*Com) callconv(.winapi) void, PSSetShaderResources)(g, 0, 7, &views);
         // The instance offset goes through `Params`: StartInstanceLocation
         // only moves vertex-buffer reads, not this structured buffer's.
         g.slot(*const fn (*Com, u32, u32, u32, u32) callconv(.winapi) void, DrawInstanced)(g, 4, @intCast(count), 0, 0);
@@ -514,8 +510,8 @@ pub const Renderer = struct {
         g.slot(*const fn (*Com, ?*Com, ?*const anyopaque, u32) callconv(.winapi) void, PSSetShader)(g, ps, null, 0);
         var inst = [1]?*Com{r.instance_srv};
         g.slot(*const fn (*Com, u32, u32, [*]const ?*Com) callconv(.winapi) void, VSSetShaderResources)(g, 0, 1, &inst);
-        var views = [6]?*Com{ r.instance_srv, r.atlas_srv, r.images_srv, r.a.srv, r.native_atlas_srv, r.bound_texture };
-        g.slot(*const fn (*Com, u32, u32, [*]const ?*Com) callconv(.winapi) void, PSSetShaderResources)(g, 0, 6, &views);
+        var views = [7]?*Com{ r.instance_srv, r.atlas_srv, r.images_srv, r.a.srv, r.native_atlas_srv, r.bound_texture, r.slug.view(r.device, r.context) };
+        g.slot(*const fn (*Com, u32, u32, [*]const ?*Com) callconv(.winapi) void, PSSetShaderResources)(g, 0, 7, &views);
         g.slot(*const fn (*Com, u32, u32, u32, u32) callconv(.winapi) void, DrawInstanced)(g, 4, @intCast(count), 0, 0);
     }
 

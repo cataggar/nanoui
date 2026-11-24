@@ -37,6 +37,7 @@ pub const Canvas = struct {
     clear: types.Color = .{},
     glyph_resets: u64 = 0,
     picture_resets: u64 = 0,
+    slug_resets: u32 = 0,
 
     pub fn deinit(cv: *Canvas, gpa: std.mem.Allocator) void {
         raster.freeLayers();
@@ -54,6 +55,7 @@ pub const Canvas = struct {
             !std.meta.eql(cv.clear, f.clear) or
             cv.glyph_resets != f.text.atlas.resets or
             cv.picture_resets != f.text.images.resets or
+            cv.slug_resets != f.text.slug.resets or
             f.textures.len > 0 or f.gradients.len > 0)
             return .{ 0, 0, w, h };
         return raster.damage(w, h, cv.drawn.items, f.instances, f.scale);
@@ -73,10 +75,11 @@ pub const Canvas = struct {
         var pictures = f.text.images.pictures();
         pictures.textures = f.textures;
         pictures.gradients = f.gradients;
-        raster.drawRegion(.{ .bytes = cv.bytes, .width = w, .height = h }, f.instances, f.text.atlas.mask(), pictures, f.scale, f.clear, region);
+        raster.drawRegion(.{ .bytes = cv.bytes, .width = w, .height = h }, f.instances, f.text.mask(), pictures, f.scale, f.clear, region);
         cv.clear = f.clear;
         cv.glyph_resets = f.text.atlas.resets;
         cv.picture_resets = f.text.images.resets;
+        cv.slug_resets = f.text.slug.resets;
         cv.drawn.clearRetainingCapacity();
         // Out of memory: the next frame is drawn whole.
         cv.drawn.appendSlice(gpa, f.instances) catch {

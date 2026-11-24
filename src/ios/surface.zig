@@ -266,7 +266,9 @@ pub const Surface = struct {
             if (self.depth == 0) self.free();
             return;
         }
+        if (self.text.atlas.reset_during_frame or self.text.images.reset_during_frame or self.text.slug.reset_during_frame) self.renderer.waitIdle();
         self.renderer.syncImages(&self.text.images);
+        self.renderer.syncSlug(&self.text.slug);
         self.renderer.textures = c.textures.items;
         self.renderer.gradients = c.gradients.items;
         // The renderer draws into the drawable it is given (on the Mac, the

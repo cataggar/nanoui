@@ -62,7 +62,7 @@ pub fn paintGpu(self: *Surface, h: w.HWND) bool {
     const g = &self.gpu.?;
     const bg = self.ctx.theme.background;
     p.setBackground(bg.r, bg.g, bg.b);
-    g.sync(self.text.atlas.mask(), self.text.atlas.generation, self.text.images.pictures(), self.text.images.generation);
+    g.sync(self.text.mask(), self.text.atlas.generation, self.text.images.pictures(), self.text.images.generation);
     // What the app asked the window to show (`setColour`), at this frame's
     // boundary: no back buffer is held yet (`ResizeBuffers` needs none).
     if ((self.colour == .extended_linear) != p.extended) {
@@ -288,7 +288,7 @@ pub fn verify(self: *Surface) void {
     var pictures = self.text.images.pictures();
     pictures.textures = self.ctx.textures.items;
     pictures.gradients = self.ctx.gradients.items;
-    raster.draw(whole, self.instances.items, self.text.atlas.mask(), pictures, self.scale, self.ctx.theme.background);
+    raster.draw(whole, self.instances.items, self.text.mask(), pictures, self.scale, self.ctx.theme.background);
     var differ: usize = 0;
     for (whole_bytes, px.bytes) |a, b| {
         if (a != b) differ += 1;

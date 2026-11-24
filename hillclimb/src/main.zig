@@ -152,7 +152,7 @@ fn parseArgs(init: std.process.Init) !Options {
             if (!(scale > 0)) return error.InvalidArgument;
             i += 1;
         } else if (std.mem.eql(u8, a, "--help") or std.mem.eql(u8, a, "-h")) {
-            std.debug.print("usage: hillclimb [--scene boxes,text,scroll,list,dashboard,springs,letters] [--frames N] [--repeat N] [--only nanoui|mygo|clay] [--width N] [--height N] [--scale F] [--label NAME] [--cheap-shadow] [--no-history]\n", .{});
+            std.debug.print("usage: hillclimb [--scene boxes,text,scroll,list,dashboard,springs,letters,zoom_text] [--frames N] [--repeat N] [--only nanoui|mygo|clay] [--width N] [--height N] [--scale F] [--label NAME] [--cheap-shadow] [--no-history]\n", .{});
             std.process.exit(0);
         } else return error.UnknownArgument;
     }

@@ -13,7 +13,7 @@ try {
   page.on("console", message => { if (message.type() === "error") errors.push(message.text()); else console.log(message.text()); });
   if(process.env.NANOUI_FORCE_EXTERNAL_COPY)await page.addInitScript(()=>globalThis.__forceExternalCopy=true);
   await page.goto(host.url);
-  const sceneIds=process.env.NANOUI_SCENES?.split(",").map(Number)??(hardware?Array.from({length:19},(_,i)=>i):[...Array.from({length:14},(_,i)=>i),16,17,18]);
+  const sceneIds=process.env.NANOUI_SCENES?.split(",").map(Number)??(hardware?Array.from({length:20},(_,i)=>i):[...Array.from({length:14},(_,i)=>i),16,17,18,19]);
   const backendPref = process.env.NANOUI_WEB_BACKEND ?? "both";
   const backends = backendPref === "both" ? ["webgpu", "webgl2"] : [backendPref];
   const results = await page.evaluate(async ({ scenes, backends }) => {
@@ -28,7 +28,7 @@ try {
       if (runtime.backend !== backend) throw new Error(`Expected backend ${backend}, got ${runtime.backend}`);
       const e = runtime.exports;
       for (const scene of scenes) for (const scale of [1, 2]) for (const format of [0, 1]) {
-        const name = `[${backend}] ${["widgets","canvas","glass light","glass dark","effects","BGRA texture","affine texture","LUTs","half-float texture","I420 external","compute hook","external LUT","external copy","motion","H.264 VideoFrame","HEVC VideoFrame","image sink","display encoded texture","surface linear texture"][scene]} scale=${scale} ${format ? "rgba" : "bgra"}`;
+        const name = `[${backend}] ${["widgets","canvas","glass light","glass dark","effects","BGRA texture","affine texture","LUTs","half-float texture","I420 external","compute hook","external LUT","external copy","motion","H.264 VideoFrame","HEVC VideoFrame","image sink","display encoded texture","surface linear texture","slug vector text"][scene]} scale=${scale} ${format ? "rgba" : "bgra"}`;
         const release = await fixtures.setup(scene);
         if (!release) { allResults.push({ name, status: 0, skipped: true, mean: 0, worst: 0, off: 0, instances: 0 }); continue; }
         await new Promise((resolve, reject) => {

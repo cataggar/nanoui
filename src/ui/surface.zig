@@ -466,24 +466,7 @@ pub const Surface = struct {
         const now = if (target_in > 0) target_in else cf.CACurrentMediaTime();
         const sync = self.pending_sync;
         self.pending_sync = false;
-        const presented = self.presentFrame(now, target_in, dur, sync, .{
-            .t = now,
-            .kind = .retained,
-            .interval_ms = 0,
-            .duration = dur,
-            .dt = @floatCast(dur),
-            .build_ms = 0,
-            .layout_ms = 0,
-            .paint_ms = 0,
-            .after_frame_ms = 0,
-            .drawable_wait_ms = 0,
-            .encode_ms = 0,
-            .sync = sync,
-            .nodes = c.stats.nodes,
-            .instances = self.instances.items.len,
-            .atlas_reset = false,
-            .animating = c.time_driven == .fast,
-        });
+        const presented = self.presentFrame(now, target_in, dur, sync, .{ .t = now, .kind = .retained, .interval_ms = 0, .duration = dur, .dt = @floatCast(dur), .build_ms = 0, .layout_ms = 0, .paint_ms = 0, .after_frame_ms = 0, .drawable_wait_ms = 0, .encode_ms = 0, .sync = sync, .nodes = c.stats.nodes, .instances = self.instances.items.len, .atlas_reset = false, .animating = c.time_driven == .fast });
         if (!presented) return self.requestFrame();
         if (self.retained_ready) {
             self.retained_ready = false;
@@ -495,9 +478,10 @@ pub const Surface = struct {
         const c = &self.ctx;
         const wall_now = cf.CACurrentMediaTime();
         self.renderer.setLiveResize(sync);
-        const atlas_reset = self.text.atlas.reset_during_frame or self.text.images.reset_during_frame;
+        const atlas_reset = self.text.atlas.reset_during_frame or self.text.images.reset_during_frame or self.text.slug.reset_during_frame;
         if (atlas_reset) self.renderer.waitIdle();
         self.renderer.syncImages(&self.text.images);
+        self.renderer.syncSlug(&self.text.slug);
         self.renderer.textures = c.textures.items;
         self.renderer.gradients = c.gradients.items;
         self.renderer.before_encode = self.before_encode;

@@ -337,15 +337,27 @@ static float clip_coverage(VOut in, Instance i) {
     return clip_cover;
 }
 
+static float slug_coverage(texture2d<uint, access::read> slug_tex, uint blob, float2 render_coord, float2 ems_per_pixel);
+
 fragment float4 fs(VOut in [[stage_in]],
                    constant Instance *instances [[buffer(0)]],
                    texture2d<float> atlas [[texture(0)]],
                    texture2d<float> images [[texture(1)]],
                    texture2d<float> layer_tex [[texture(2)]],
                    texture2d<float> frame [[texture(3)]],
+                   texture2d<uint, access::read> slug_tex [[texture(4)]],
                    constant float4 *grads [[buffer(3)]]) {
+    float2 duv_dx = dfdx(in.uv);
+    float2 duv_dy = dfdy(in.uv);
     Instance i = instances[in.inst];
     float clip_cover = clip_coverage(in, i);
+    if (i.kind == 13.0) {
+        uint blob = uint(i.border_color.x + 0.5) | (uint(i.border_color.y + 0.5) << 16u);
+        float2 ems_per_pixel = float2(length(float2(duv_dx.x, duv_dy.x)), length(float2(duv_dx.y, duv_dy.y)));
+        float a = slug_coverage(slug_tex, blob, in.uv, ems_per_pixel) * i.color.a;
+        if (i.border_width > 0.0) a *= clamp((i.radius - in.world.x) / i.border_width, 0.0, 1.0);
+        return float4(i.color.rgb * a, a) * (clip_cover * in.pulse_alpha);
+    }
     return shade(in, i, atlas, images, layer_tex, frame, grads) * (clip_cover * in.pulse_alpha);
 }
 

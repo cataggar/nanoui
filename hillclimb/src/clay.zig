@@ -108,7 +108,7 @@ fn declare(arena: std.mem.Allocator, scene: scenes.Scene, frame: usize, t: f32) 
             for (first..first + @as(usize, @intFromFloat(main.height)) / 28 + 1) |i| row(arena, i);
             close();
         },
-        .springs, .letters => {},
+        .springs, .letters, .zoom_text => {},
         .dashboard => {
             open(.{ .layout = .{ .sizing = .{ .width = grow(), .height = grow() }, .padding = pad(16, 16), .childGap = 12, .layoutDirection = c.CLAY_TOP_TO_BOTTOM } });
             for (0..3) |r| {

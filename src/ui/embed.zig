@@ -353,6 +353,15 @@ pub const Host = struct {
             .dirty = if (self.text.images.takeDirtyRect()) |r| DirtyRect.fromArray(r) else null,
         };
         self.last_image_gen = image_atlas.generation;
+        const sv = self.text.slugView();
+        const vector_glyphs: contract.VectorGlyphTable = .{
+            .words = sv.words,
+            .width = sv.width,
+            .height = sv.height,
+            .used_words = sv.used_words,
+            .generation = sv.generation,
+            .resets = self.text.slug.resets,
+        };
         const pixel_size: [2]u32 = .{
             if (self.size.w > 0) @intFromFloat(@max(1, @round(self.size.w * self.scale))) else 0,
             if (self.size.h > 0) @intFromFloat(@max(1, @round(self.size.h * self.scale))) else 0,
@@ -369,6 +378,7 @@ pub const Host = struct {
             .textures = self.ctx.textures.items,
             .glyph_atlas = glyph_atlas,
             .image_atlas = image_atlas,
+            .vector_glyphs = vector_glyphs,
             .cursor = cursor,
             .clipboard_write = if (self.clipboard_wrote) self.clipboard_buf.items else null,
             .ime = ime,

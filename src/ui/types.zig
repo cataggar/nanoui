@@ -549,6 +549,8 @@ pub const TextStyle = struct {
     stretch: u16 = 100,
     /// Standard ligatures (`fi`); CSS turns them off when letters are spaced.
     ligatures: bool = true,
+    /// Analytic vector curves (`Kind.vector_text`) instead of atlas bitmaps.
+    vector: bool = false,
 
     /// The weight asked for, on CSS's scale.
     pub fn weightValue(s: TextStyle) u16 {

@@ -83,7 +83,7 @@ fn drawnPixels(px: gpu.Pixels, clear: ui.Color) usize {
 /// So the frame has to have content before it is compared.
 pub fn drawThenRead(r: *d3d11.Renderer, t: *ui.Tester, clear: ui.Color) !gpu.Pixels {
     const gpa = testing.allocator;
-    r.sync(t.text.atlas.mask(), t.text.atlas.generation, t.text.images.pictures(), t.text.images.generation);
+    r.sync(t.text.mask(), t.text.atlas.generation, t.text.images.pictures(), t.text.images.generation);
     r.draw(t.instances.items, t.size, t.scale, clear, null);
     const px = try r.read(gpa);
     if (drawnPixels(px, clear) == 0) {
@@ -443,4 +443,14 @@ test "d3d11: the sizes a drag passes through keep every glass target alive" {
         try testing.expect(r.b.texture != null and r.b.rtv != null and r.b.srv != null);
         try testing.expect(r.snap.texture != null and r.snap.rtv != null and r.snap.srv != null);
     }
+}
+
+test "d3d11: slug vector text matches the CPU renderer" {
+    const Scene = @import("tests_slug.zig").Scene;
+    var s: Scene = .{};
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&s, Scene.view), .{ .width = 360, .height = 300 });
+    defer t.deinit();
+    t.settle(1);
+    try compare(&t, .{ .mean = 0.1, .worst = 32, .off_in = 500 });
 }
