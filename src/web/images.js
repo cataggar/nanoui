@@ -11,7 +11,9 @@ export function createImageLoader({
   getExports,
   baseUrl,
   maxConcurrent = 6,
+  fetchImage,
 } = {}) {
+  const doFetch = typeof fetchImage === "function" ? fetchImage : (url, init) => fetch(url, init);
   let resolvedBase = baseUrl ? String(baseUrl) : undefined;
   let concurrency = Math.max(1, Math.min(64, (maxConcurrent >>> 0) || 6));
   let disposed = false;
@@ -122,7 +124,7 @@ export function createImageLoader({
       let blob = job.blob;
       job.blob = null;
       if (!blob) {
-        const res = await fetch(job.resolvedUrl, { signal });
+        const res = await doFetch(job.resolvedUrl, { signal });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         blob = await res.blob();
       }
