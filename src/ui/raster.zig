@@ -27,7 +27,11 @@ pub const Mask = struct {
     /// analyses with their own gamma and contrast, not the system default's.
     classic_text_params: @import("text_blend.zig").Params = .{},
     classic_gray_params: @import("text_blend.zig").Params = .{},
-    slug_words: []const u32 = &.{}, slug_height: u32 = 0, slug_used: u32 = 0, slug_resets: u64 = 0, slug_generation: u64 = 0,
+    slug_words: []const u32 = &.{},
+    slug_height: u32 = 0,
+    slug_used: u32 = 0,
+    slug_resets: u64 = 0,
+    slug_generation: u64 = 0,
 };
 
 /// The image atlas: BGRA premultiplied, `size` × `size` (empty: none).

@@ -385,7 +385,7 @@ pub fn popover(c: *Context, id: []const u8, open: *bool, anchor: Anchor, opts: P
     d = if (opts.glass) d.glass(.{}) else d.bg(opts.background orelse c.theme.surface).border(opts.border orelse c.theme.border);
     if (opts.width) |w| d = d.w(w);
     if (open.*) {
-        _ = absorbPointer(d);
+        d = d.occlude();
         c.overlay.noteLayer(c.gpa, panel_id, opts.layer);
     }
     c.overlay.deferArrange(c.gpa, .{ .node_index = d.index, .anchor = anchor, .placement = opts.placement, .gap = opts.gap, .margin = opts.margin });
@@ -459,7 +459,7 @@ pub fn floatingPanel(c: *Context, id: []const u8, open: *bool, opts: FloatingPan
     d = if (opts.glass) d.glass(.{}) else d.bg(c.theme.surface).border(c.theme.border);
     if (opts.width) |w| d = d.w(w);
     if (open.*) {
-        _ = absorbPointer(d);
+        d = d.occlude();
         c.overlay.noteLayer(c.gpa, panel_id, opts.layer);
     }
     d = d.motion(f);
