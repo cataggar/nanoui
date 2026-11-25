@@ -47,6 +47,7 @@ export async function load({
   url,
   baseUrl,
   imageConcurrency = 6,
+  imageFetch,
   gpu: gpuPref = "auto",
   canvas,
   device,
@@ -100,6 +101,7 @@ export async function load({
     getExports,
     baseUrl: baseUrl ?? (typeof location !== "undefined" ? location.href : undefined),
     maxConcurrent: imageConcurrency,
+    fetchImage: imageFetch,
   });
 
   const js = createJSBridge(getMemory, getExports);

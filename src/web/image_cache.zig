@@ -359,6 +359,15 @@ pub const ImageCache = struct {
         self.removeMatching(key_or_url, true);
     }
 
+    pub fn retryFailed(self: *ImageCache) void {
+        var cur = self.lru_head;
+        while (cur != none) {
+            const next = self.entries.items[cur].next;
+            if (self.entries.items[cur].status == .failed) self.removeEntryAt(cur);
+            cur = next;
+        }
+    }
+
     fn removeMatching(self: *ImageCache, key_or_url: []const u8, failed_only: bool) void {
         var cur = self.lru_head;
         while (cur != none) {
@@ -388,6 +397,9 @@ pub const ImageCache = struct {
     }
     pub fn loadingCount(self: *const ImageCache) usize {
         return self.loading_count;
+    }
+    pub fn failedCount(self: *const ImageCache) usize {
+        return self.failed_count;
     }
     pub fn totalBytes(self: *const ImageCache) usize {
         return self.total_bytes;

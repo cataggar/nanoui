@@ -13,7 +13,9 @@
         },
     },
     .paths = .{
+        "tools/embed_build.zig",
         "tools/web/build.zig",
+        "tools/web/dts_gen.zig",
         "build.zig",
         "build.zig.zon",
         "src",

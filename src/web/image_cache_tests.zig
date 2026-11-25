@@ -401,6 +401,20 @@ test "stale status abort, invalidate cancellation, and late or unregistered orph
     host.handleComplete(0, 1, 78, 5, 16, 16, 1024, @backingInt(host.Status.ok));
     host.handleComplete(dead_cache_id, 1, 0, 0, 0, 0, 0, @backingInt(host.Status.failed));
     try testing.expectEqual(orphans_before + 2, host.orphanReleaseCount());
+
+    // failedCount and retryFailed evict only failed entries while keeping ready entries intact.
+    vs.url = "https://ex/fail-retry.png";
+    t.frame();
+    try testing.expect(cache.mockFail("https://ex/fail-retry.png"));
+    t.frame();
+    try testing.expect(vs.state == .failed and cache.failedCount() == 1 and cache.readyCount() == 1);
+    cache.retryFailed();
+    try testing.expect(cache.failedCount() == 0 and cache.readyCount() == 1);
+    t.frame();
+    try testing.expectEqual(ic.State.loading, vs.state);
+    try testing.expect(cache.mockResolve("https://ex/fail-retry.png", .{ .width = 16, .height = 16 }));
+    t.frame();
+    try testing.expect(vs.state == .ready and cache.readyCount() == 2);
 }
 
 test "image widget placeholder, fade-in tween, rendered red pixels, warm mount, failed fallback, and fit modes" {

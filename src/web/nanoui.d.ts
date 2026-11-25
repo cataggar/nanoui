@@ -39,6 +39,9 @@ export type WorkerRpcClient<Services = DefaultServices> = Services & {
 
 export interface LoadOptions<Host = Record<string, unknown>> {
   url: string | URL;
+  baseUrl?: string | URL;
+  imageConcurrency?: number;
+  imageFetch?: (url: string, init: RequestInit) => Promise<Response>;
   gpu?: "auto" | "webgpu" | "webgl2";
   canvas?: HTMLCanvasElement | OffscreenCanvas;
   device?: unknown;
