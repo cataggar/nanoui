@@ -557,4 +557,3 @@ test "vector text emits Kind.vector_text instances, batches in PassIterator, and
     try testing.expectEqual(used_before, out_zoomed.vector_glyphs.used_words);
     try testing.expectEqual(gen_before, out_zoomed.vector_glyphs.generation);
 }
-

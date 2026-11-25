@@ -86,7 +86,7 @@ pub fn popover(c: *ui.Context, id: []const u8, open: *bool, anchor: ?ui.Rect, op
     d = if (opts.glass) d.rounded(t.radius + 8).glass(.{}) else d.bg(t.popover).border(t.border);
     if (opts.width) |w| d = d.w(w);
     if (open.*) {
-        _ = popover_mod.absorbPointer(d);
+        d = d.occlude();
         c.overlay.noteLayer(c.gpa, panel_id, layer_popover);
     }
     const anc: ui.Anchor = if (anchor) |r| ui.Anchor.fromRect(r) else ui.Anchor.fromPoint(.{ .x = c.size.w / 2, .y = c.size.h / 2 });
